@@ -530,15 +530,18 @@ SIGNAL(PWM_INTERRUPT)
     }
     
     // base waveform
-    fp = g_phase/8; // keep fp between zero and 2047
+    fp = g_phase/4; // keep fp between zero and 2047
     switch (wave_type)
     {
+    case 0: // rough sawtooth
+      ssample = (short)1023-(short)fp;
+      break;
     case 1: // sawtooth
-        ssample = (short)1023-(short)fp;
-        break;
+      ssample = (fp < 1024) ? (short)1023-(short)fp*2 : (short)fp*2-3072;
+      break;
     case 2: // sine
-        ssample = (short)pgm_read_byte(&mysin_table[fp]) * 256 + (unsigned char)pgm_read_byte((unsigned char*)&mysin_table[fp] + 1);
-        break;
+      ssample = (short)pgm_read_byte(&mysin_table[fp]) * 256 + (unsigned char)pgm_read_byte((unsigned char*)&mysin_table[fp] + 1);
+      break;
     }
     
     // ssample is between -1024 and 1023

@@ -1,11 +1,17 @@
-#include <stdio.h>
-#include <stdarg.h>
-#include <stdlib.h>
-#include <time.h>
-#include <math.h>
-#define rnd(n) (rand()%(n+1))
+#include <avr/io.h>
+#include <avr/interrupt.h>
 
 #define PI 3.14159265f
+
+#define PWM_PIN       3
+#define PWM_VALUE     OCR2B
+#define PWM_INTERRUPT TIMER2_OVF_vect
+
+#define VIBRATO_SPEED_CTRL 0
+#define VIBRATO_DEPTH_CTRL 1
+#define LOWPASS_FREQ_CTRL 2
+#define LOWPASS_RAMP_CTRL 3
+#define LOWPASS_RESONANCE_CTRL 4
 
 int wave_type;
 
@@ -50,6 +56,67 @@ float vib_phase;
 float vib_speed;
 float vib_amp;
 
+
+void setup()
+{
+    // set up the PWM pin
+    pinMode(PWM_PIN,OUTPUT);
+    // Set up PWM to 31.25kHz, phase accurate
+    TCCR2A = _BV(COM2B1) | _BV(WGM20);
+    TCCR2B = _BV(CS20);
+    TIMSK2 = _BV(TOIE2);
+
+    // for debugging
+    Serial.begin(115200);
+
+    // set up the initial values for all the controls
+    wave_type = 1; // sawtooth
+
+    p_env_attack = 0.05f;
+    p_env_decay = 0.7f;
+
+    p_base_freq = 0.8f;
+    p_freq_ramp = 0.0f;
+
+    p_vib_strength = 0.0f;
+    p_vib_speed = 0.0f;
+
+    p_lpf_freq = 1.0f;
+    p_lpf_ramp = 0.0f;
+    p_lpf_resonance = 0.0f;
+    p_hpf_freq = 0.0f;
+    p_hpf_ramp = 0.0f;
+
+    // start playing
+    reset_sample(0);
+}
+
+void loop() {
+    // The loop is pretty simple - it just updates the parameters
+    //p_lpf_freq = (float)analogRead(LOWPASS_FREQ_CTRL) / 1024.0f;
+    //p_lpf_ramp = (float)analogRead(LOWPASS_RAMP_CTRL) / 1024.0f;
+    //p_lpf_resonance = (float)analogRead(LOWPASS_RESONANCE_CTRL) / 1024.0f;
+    //p_vib_speed = (float)analogRead(VIBRATO_SPEED_CTRL) / 1024.0f;
+    //p_vib_strength = (float)analogRead(VIBRATO_DEPTH_CTRL) / 1024.0f;
+
+/*
+    Slider(xpos, (ypos++)*18, p_env_attack, 0, "ATTACK TIME");
+    Slider(xpos, (ypos++)*18, p_env_decay, 0, "DECAY TIME");
+
+    Slider(xpos, (ypos++)*18, p_base_freq, 0, "START FREQUENCY");
+    Slider(xpos, (ypos++)*18, p_freq_ramp, 1, "SLIDE");
+
+    Slider(xpos, (ypos++)*18, p_vib_strength, 0, "VIBRATO DEPTH");
+    Slider(xpos, (ypos++)*18, p_vib_speed, 0, "VIBRATO SPEED");
+
+    Slider(xpos, (ypos++)*18, p_lpf_freq, 0, "LP FILTER CUTOFF");
+    Slider(xpos, (ypos++)*18, p_lpf_ramp, 1, "LP FILTER CUTOFF SWEEP");
+    Slider(xpos, (ypos++)*18, p_lpf_resonance, 0, "LP FILTER RESONANCE");
+    Slider(xpos, (ypos++)*18, p_hpf_freq, 0, "HP FILTER CUTOFF");
+    Slider(xpos, (ypos++)*18, p_hpf_ramp, 1, "HP FILTER CUTOFF SWEEP");
+*/
+}
+
 void reset_sample(int restart)
 {
     int i;
@@ -88,10 +155,11 @@ void reset_sample(int restart)
     }
 }
 
-/* TODO: change this to an interrupt handler */
-void synth_sample()
+/* interrupt handler - that's where the synthesis happens */
+SIGNAL(PWM_INTERRUPT)
 {
     int i, si;
+    float rfperiod, ssample, fp, pp;
 
     if(!playing_sample)
         return;
@@ -103,7 +171,7 @@ void synth_sample()
         fperiod=fmaxperiod;
         playing_sample = 0;
     }
-    float rfperiod=fperiod;
+    rfperiod=fperiod;
     if(vib_amp>0.0f)
     {
         vib_phase+=vib_speed;
@@ -111,7 +179,12 @@ void synth_sample()
     }
     period=(int)rfperiod;
     if(period<8) period=8;
+    
+    //
     // volume envelope
+    //
+
+    // compute by stage, keeping env_vol between zero and one
     env_time++;
     if(env_time>env_length[env_stage])
     {
@@ -122,19 +195,24 @@ void synth_sample()
     }
     if(env_stage==0)
         env_vol=(float)env_time/env_length[0];
-    if(env_stage==1)
+    else if(env_stage==1)
         env_vol=1.0f;
-    if(env_stage==2)
+    else
         env_vol=1.0f-(float)env_time/env_length[2];
 
+    // high-pass filter adjustments
     if(flthp_d!=0.0f)
     {
         flthp*=flthp_d;
         if(flthp<0.00001f) flthp=0.00001f;
         if(flthp>0.1f) flthp=0.1f;
     }
+    
+    //
+    // current sample computation
+    //
 
-    float ssample=0.0f;
+    ssample=0.0f;
     for(si=0;si<8;si++) // 8x supersampling
     {
         float sample=0.0f;
@@ -144,7 +222,7 @@ void synth_sample()
             phase%=period;
         }
         // base waveform
-        float fp=(float)phase/period;
+        fp=(float)phase/period;
         switch(wave_type)
         {
         case 1: // sawtooth
@@ -155,7 +233,7 @@ void synth_sample()
             break;
         }
         // lp filter
-        float pp=fltp;
+        pp=fltp;
         fltw*=fltw_d;
         if(fltw<0.0f) fltw=0.0f;
         if(fltw>0.1f) fltw=0.1f;
@@ -177,29 +255,13 @@ void synth_sample()
         // final accumulation and envelope application
         ssample+=sample*env_vol;
     }
-    ssample=ssample/8;
+    // now sample is between -8 and 8
+    // scale it between -128 and 127
+    ssample=ssample*16;
 
-    /* TODO: scale this properly and fix the boundaries */
-    if(ssample>1.0f) ssample=1.0f;
-    if(ssample<-1.0f) ssample=-1.0f;
-    /* TODO: check if this is the right register */
-    /* OCR2B=(int)ssample;*/
+    if(ssample>127.0f) ssample=127.0f;
+    if(ssample<-128.0f) ssample=-128.0f;
+    /* check if this is the right register */
+    PWM_VALUE=(int)ssample + 128;
 }
-
-/*
-    Slider(xpos, (ypos++)*18, p_env_attack, 0, "ATTACK TIME");
-    Slider(xpos, (ypos++)*18, p_env_decay, 0, "DECAY TIME");
-
-    Slider(xpos, (ypos++)*18, p_base_freq, 0, "START FREQUENCY");
-    Slider(xpos, (ypos++)*18, p_freq_ramp, 1, "SLIDE");
-
-    Slider(xpos, (ypos++)*18, p_vib_strength, 0, "VIBRATO DEPTH");
-    Slider(xpos, (ypos++)*18, p_vib_speed, 0, "VIBRATO SPEED");
-
-    Slider(xpos, (ypos++)*18, p_lpf_freq, 0, "LP FILTER CUTOFF");
-    Slider(xpos, (ypos++)*18, p_lpf_ramp, 1, "LP FILTER CUTOFF SWEEP");
-    Slider(xpos, (ypos++)*18, p_lpf_resonance, 0, "LP FILTER RESONANCE");
-    Slider(xpos, (ypos++)*18, p_hpf_freq, 0, "HP FILTER CUTOFF");
-    Slider(xpos, (ypos++)*18, p_hpf_ramp, 1, "HP FILTER CUTOFF SWEEP");
-*/
 

@@ -53,7 +53,6 @@ float flthp_d;
 
 // vibrato
 unsigned short g_vib_phase;
-unsigned char g_vib_subphase;
 unsigned char g_vib_strength;
 unsigned char g_vib_speed;
 short g_vib_fix_accum;
@@ -364,7 +363,7 @@ void setup()
     // Set the compare register (OCR1A).
     // OCR1A is a 16-bit register, so we have to do this with
     // interrupts disabled to be safe.
-    OCR1A = 976;    // 16e6 / 16384
+    OCR1A = 1953;    // 16e6 / 8192
     
     // Enable interrupt when TCNT1 == OCR1A (p.136)
     TIMSK1 |= _BV(OCIE1A);
@@ -373,10 +372,10 @@ void setup()
     // set up the initial values for all the controls
     wave_type = 1; // sawtooth
 
-    g_env_lengths[0] = 6000;
-    g_env_lengths[1] = 10000;
+    g_env_lengths[0] = 1000;
+    g_env_lengths[1] = 1500;
 
-    g_base_freq = 880;
+    g_base_freq = 440;
     g_freq_ramp = 0;
     g_freq_ramp_cnt = 0;
 
@@ -386,8 +385,8 @@ void setup()
     g_hpf_freq = 0;
     g_hpf_ramp = 0;
 
-    g_vib_speed = 1;
-    g_vib_strength = 1; // test - remove later
+    g_vib_speed = 0;
+    g_vib_strength = 0; // test - remove later
     
     // start playing
     reset_sample(0);
@@ -400,8 +399,8 @@ void loop() {
     //g_lpf_base_freq = analogRead(LOWPASS_FREQ_CTRL) / 4;
     //g_lpf_ramp = analogRead(LOWPASS_RAMP_CTRL) / 4;
     //g_lpf_resonance = analogRead(LOWPASS_RESONANCE_CTRL) / 4;
-    //g_vib_speed = analogRead(VIBRATO_SPEED_CTRL) / 4;
-    //g_vib_strength = analogRead(VIBRATO_DEPTH_CTRL) / 4;
+    g_vib_speed = analogRead(VIBRATO_SPEED_CTRL) / 4;
+    g_vib_strength = analogRead(VIBRATO_DEPTH_CTRL) / 4;
 
 /*
     Slider(xpos, (ypos++)*18, p_env_attack, 0, "ATTACK TIME");
@@ -439,7 +438,6 @@ void reset_sample(int restart)
     
     // reset vibrato
     g_vib_phase = 0;
-    g_vib_subphase = 0;
     g_vib_fix_accum = 0;
     
     // reset envelope
@@ -463,22 +461,15 @@ SIGNAL(PWM_INTERRUPT)
     // restore later (?)
     
     // use another oscillator with a lower frequency for the vibrato
-    /*
-    g_vib_subphase += g_vib_speed;
-    if (g_vib_subphase < g_vib_speed) g_vib_phase++;
-    */
     g_vib_phase += g_vib_speed;
     
     if(g_vib_strength > 0)
     {
-      // TODO: something here is not quite right...
-      
       // vib_fix should be between -0x80 and 0x7f
       g_vib_fix_accum += phase_to_delta[g_vib_phase/0x4000];
-      vib_fix = ((g_vib_fix_accum / 0x80) * g_vib_strength) / 0x10;
+      vib_fix = ((g_vib_fix_accum / 0x80) * (short)g_vib_strength) / 0x10;
       
       // fix the frequency according to the vibrato
-      // TODO: this is not right. don't use accumulation. apply the fix without changing g_curr_freq
       if ((vib_fix < 0) && (-vib_fix >= g_curr_freq)) vibrated_freq = 1;
       else vibrated_freq = g_curr_freq + vib_fix;
     }
@@ -492,17 +483,17 @@ SIGNAL(PWM_INTERRUPT)
 
     // compute by stage, keeping env_vol between zero and 0xff
     g_env_time++;
-    if(g_env_time>g_env_lengths[g_env_stage])
+    if (g_env_time > g_env_lengths[g_env_stage])
     {
         g_env_time=0;
         g_env_stage++;
-        if(g_env_stage==2)
+        if (g_env_stage == 2)
             reset_sample(1);
     }
     if(g_env_stage==0)
-        env_vol=(unsigned char)(g_env_time/(g_env_lengths[0]/0x100));
+        env_vol=(unsigned char)(g_env_time / (g_env_lengths[0]/0x100 + 1));
     else
-        env_vol=255-(unsigned char)(g_env_time/(g_env_lengths[1]/0x100));
+        env_vol=255-(unsigned char)(g_env_time / (g_env_lengths[1]/0x100 + 1));
 
     // high-pass filter adjustments
 /*
@@ -517,12 +508,12 @@ SIGNAL(PWM_INTERRUPT)
     //
     // current sample computation
     //
-
+    
     ssample = 0;
     g_phase += vibrated_freq;
-    if (g_phase >= 16384)
+    if (g_phase >= 8192)
     {
-      g_phase %= 16384;
+      g_phase %= 8192;
       
       //
       // wave length wraparound. this is a good time to make changes in the frequency

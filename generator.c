@@ -38,7 +38,8 @@ unsigned short g_env_lengths[2];
 
 // low-pass filter
 unsigned char g_lpf_resonance;
-unsigned char g_lpf_freq;
+unsigned char g_lpf_base_freq;
+unsigned char g_lpf_curr_freq;
 char g_lpf_ramp;
 char g_lpf_prev;
 char g_lpf_prev_delta;
@@ -52,12 +53,15 @@ float flthp_d;
 
 // vibrato
 unsigned short g_vib_phase;
+unsigned char g_vib_subphase;
 unsigned char g_vib_strength;
 unsigned char g_vib_speed;
+short g_vib_fix_accum;
 
 // debugging
 unsigned short g_cnt;
 
+const short phase_to_delta[4] = {1,-1,-1,1};
 
 const short mysin_table[2048] PROGMEM = {
    0,  3,  6,  9,  12,  15,  18,  21,  
@@ -373,18 +377,18 @@ void setup()
     g_env_lengths[1] = 10000;
 
     g_base_freq = 880;
-    g_freq_ramp = 1;
+    g_freq_ramp = 0;
     g_freq_ramp_cnt = 0;
 
-    g_vib_strength = 0;
-    g_vib_speed = 0;
-
-    g_lpf_freq = 255;
+    g_lpf_base_freq = 255;
     g_lpf_ramp = 0;
     g_lpf_resonance = 0;
     g_hpf_freq = 0;
     g_hpf_ramp = 0;
 
+    g_vib_speed = 1;
+    g_vib_strength = 1; // test - remove later
+    
     // start playing
     reset_sample(0);
     
@@ -393,10 +397,10 @@ void setup()
 
 void loop() {
     // The loop is pretty simple - it just updates the parameters
-    //g_lpf_freq = analogRead(LOWPASS_FREQ_CTRL) / 4;
+    //g_lpf_base_freq = analogRead(LOWPASS_FREQ_CTRL) / 4;
     //g_lpf_ramp = analogRead(LOWPASS_RAMP_CTRL) / 4;
     //g_lpf_resonance = analogRead(LOWPASS_RESONANCE_CTRL) / 4;
-    g_vib_speed = analogRead(VIBRATO_SPEED_CTRL) / 4;
+    //g_vib_speed = analogRead(VIBRATO_SPEED_CTRL) / 4;
     //g_vib_strength = analogRead(VIBRATO_DEPTH_CTRL) / 4;
 
 /*
@@ -427,13 +431,16 @@ void reset_sample(int restart)
     g_curr_freq = g_base_freq;
     
     // reset filters
-    g_lpf_prev=0;
-    g_lpf_prev_delta=0;
+    g_lpf_prev = 0;
+    g_lpf_prev_delta = 0;
+    g_lpf_curr_freq = g_lpf_base_freq;
     //fltphp = 0;
     //flthp_d = 1.0+g_hpf_ramp*0.0003f;
     
     // reset vibrato
     g_vib_phase = 0;
+    g_vib_subphase = 0;
+    g_vib_fix_accum = 0;
     
     // reset envelope
     g_env_stage=0;
@@ -446,7 +453,8 @@ SIGNAL(PWM_INTERRUPT)
   short ssample;
   unsigned short fp;
   unsigned char env_vol;
-  char vib_fix;
+  unsigned short vibrated_freq;
+  short vib_fix;
 
   g_cnt++;
 
@@ -455,20 +463,27 @@ SIGNAL(PWM_INTERRUPT)
     // restore later (?)
     
     // use another oscillator with a lower frequency for the vibrato
+    /*
+    g_vib_subphase += g_vib_speed;
+    if (g_vib_subphase < g_vib_speed) g_vib_phase++;
+    */
     g_vib_phase += g_vib_speed;
+    
     if(g_vib_strength > 0)
     {
-      short vib_wave = (g_vib_phase < 0x4000) ?
-        g_vib_phase :
-          (g_vib_phase < 0xc000) ?
-            (0x4000-g_vib_phase) :
-            g_vib_phase-0xc000;
+      // TODO: something here is not quite right...
+      
       // vib_fix should be between -0x80 and 0x7f
-      vib_fix = ((vib_wave/0x80)*g_vib_strength)/0x100;
+      g_vib_fix_accum += phase_to_delta[g_vib_phase/0x4000];
+      vib_fix = ((g_vib_fix_accum / 0x80) * g_vib_strength) / 0x10;
       
       // fix the frequency according to the vibrato
-      if (vib_fix < 0 && (-vib_fix >= g_curr_freq)) g_curr_freq = 1;
-      else g_curr_freq += vib_fix;
+      // TODO: this is not right. don't use accumulation. apply the fix without changing g_curr_freq
+      if ((vib_fix < 0) && (-vib_fix >= g_curr_freq)) vibrated_freq = 1;
+      else vibrated_freq = g_curr_freq + vib_fix;
+    }
+    else {
+      vibrated_freq = g_curr_freq;
     }
 
     //
@@ -504,7 +519,7 @@ SIGNAL(PWM_INTERRUPT)
     //
 
     ssample = 0;
-    g_phase += g_curr_freq;
+    g_phase += vibrated_freq;
     if (g_phase >= 16384)
     {
       g_phase %= 16384;
@@ -540,26 +555,33 @@ SIGNAL(PWM_INTERRUPT)
     // low-pass filter
     //pp=fltp; // save this value for the high-pass filter
     /*
-    fltw*=fltw_d;
-    if(fltw<0.0f) fltw=0.0f;
-    if(fltw>0.1f) fltw=0.1f;
-    if(g_lpf_freq != 255)
+    // adjust the low-pass filter current frequency
+    if ((g_lpf_ramp < 0) && (-g_lpf_ramp > g_lpf_curr_freq)) {
+      g_lpf_curr_freq = 0;
+    }
+    else {
+      g_lpf_curr_freq += g_lpf_ramp;
+    }
+    if (g_lpf_curr_freq > 128) g_lpf_curr_freq = 128;
+    
+    if (g_lpf_base_freq != 255)
     {
-        fltdp += (ssample-fltp)*fltw;
-        fltdp -= fltdp*g_lpf_resonance;
+        g_lpf_prev_delta += (((ssample-g_lpf_prev)/0x10)*g_lpf_curr_freq)/0x10;
+        g_lpf_prev_delta = (g_lpf_prev_delta*g_lpf_resonance) / 0x100;
     }
     else
     {
-        fltp=ssample;
-        fltdp=0;
+        g_lpf_prev = ssample;
+        g_lpf_prev_delta = 0;
     }
-    fltp+=fltdp;
+    g_lpf_prev += g_lpf_prev_delta;
+    
     // hp filter
     //fltphp+=fltp-pp;
     //fltphp-=fltphp*flthp;
     // final accumulation and envelope application
     //ssample=fltphp*env_vol;
-    ssample = fltp;
+    ssample = g_lpf_prev;
     */
     
     // now sample is between -1024 and 1023

@@ -41,8 +41,8 @@ unsigned char g_lpf_resonance;
 unsigned char g_lpf_base_freq;
 unsigned char g_lpf_curr_freq;
 char g_lpf_ramp;
-char g_lpf_prev;
-char g_lpf_prev_delta;
+short g_lpf_prev;
+short g_lpf_prev_delta;
 
 // high-pass filter
 unsigned char g_hpf_freq;
@@ -381,7 +381,7 @@ void setup()
 
     g_lpf_base_freq = 255;
     g_lpf_ramp = 0;
-    g_lpf_resonance = 0;
+    g_lpf_resonance = 180; // test - change this later
     g_hpf_freq = 0;
     g_hpf_ramp = 0;
 
@@ -551,7 +551,7 @@ SIGNAL(PWM_INTERRUPT)
     
     // low-pass filter
     //pp=fltp; // save this value for the high-pass filter
-    /*
+    
     // adjust the low-pass filter current frequency
     if ((g_lpf_ramp < 0) && (-g_lpf_ramp > g_lpf_curr_freq)) {
       g_lpf_curr_freq = 0;
@@ -563,13 +563,13 @@ SIGNAL(PWM_INTERRUPT)
     
     if (g_lpf_base_freq != 255)
     {
-        g_lpf_prev_delta += (((ssample-g_lpf_prev)/0x10)*g_lpf_curr_freq)/0x10;
-        g_lpf_prev_delta = (g_lpf_prev_delta*g_lpf_resonance) / 0x100;
+      g_lpf_prev_delta += (((ssample-g_lpf_prev)/0x10)*g_lpf_curr_freq)/0x10;
+      g_lpf_prev_delta = (g_lpf_prev_delta*(0xff-g_lpf_resonance)) / 0x100;
     }
     else
     {
-        g_lpf_prev = ssample;
-        g_lpf_prev_delta = 0;
+      g_lpf_prev = ssample;
+      g_lpf_prev_delta = 0;
     }
     g_lpf_prev += g_lpf_prev_delta;
     
@@ -579,7 +579,7 @@ SIGNAL(PWM_INTERRUPT)
     // final accumulation and envelope application
     //ssample=fltphp*env_vol;
     ssample = g_lpf_prev;
-    */
+    
     
     // now sample is between -1024 and 1023
     // scale it between -128 and 127

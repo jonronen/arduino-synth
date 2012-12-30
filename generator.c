@@ -127,7 +127,7 @@ const short mysin_table[2048] PROGMEM = {
    1021,  1021,  1021,  1021,  1022,  1022,  1022,  1022,  
    1022,  1022,  1023,  1023,  1023,  1023,  1023,  1023,  
    1023,  1023,  1023,  1023,  1023,  1023,  1023,  1023,  
-   1024,  1023,  1023,  1023,  1023,  1023,  1023,  1023,  
+   1023,  1023,  1023,  1023,  1023,  1023,  1023,  1023,  
    1023,  1023,  1023,  1023,  1023,  1023,  1023,  1022,  
    1022,  1022,  1022,  1022,  1022,  1021,  1021,  1021,  
    1021,  1020,  1020,  1020,  1020,  1019,  1019,  1019,  
@@ -540,7 +540,10 @@ SIGNAL(PWM_INTERRUPT)
       ssample = (fp < 1024) ? (short)1023-(short)fp*2 : (short)fp*2-3072;
       break;
     case 2: // sine
-      ssample = (short)pgm_read_byte(&mysin_table[fp]) * 256 + (unsigned char)pgm_read_byte((unsigned char*)&mysin_table[fp] + 1);
+      ssample = (short)pgm_read_word(&mysin_table[fp]);
+      break;
+    case 3: // square
+      ssample = (short)1023 * (short)(fp/1024);
       break;
     }
     

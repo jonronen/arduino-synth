@@ -1,0 +1,5 @@
+formula:
+
+d(i) = d(i-1) + (x(i)-y(i-1))*alpha
+y_i = y(i-1) + d(i)*beta = y(i-1) + (x(i)-y(i-1))*alpha*beta + d(i-1)*beta
+

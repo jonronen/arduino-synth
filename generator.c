@@ -312,7 +312,7 @@ const prog_int16_t mysin_table[2048] = {
    -100,  -97,  -94,  -90,  -87,  -84,  -81,  -78,  
    -75,  -72,  -69,  -65,  -62,  -59,  -56,  -53,  
    -50,  -47,  -43,  -40,  -37,  -34,  -31,  -28,  
-   -25,  -21,  -18,  -15,  -12,  -9,  -6,  -3, 
+   -25,  -21,  -18,  -15,  -12,  -9,  -6,  -3 
 };
 */
 
@@ -365,7 +365,7 @@ void setup()
   sei();
   
   // set up the initial values for all the controls
-  g_wave_type = 1; // sawtooth
+  g_wave_type = 3; // square
 
   g_env_lengths[0] = 1000;
   g_env_lengths[1] = 1500;
@@ -452,7 +452,7 @@ static void reset_sample()
 /* interrupt handler - that's where the synthesis happens */
 SIGNAL(PWM_INTERRUPT)
 {
-  short ssample;
+  short sample;
   unsigned short fp;
   unsigned char env_vol;
   unsigned short vibrated_freq;
@@ -532,24 +532,24 @@ SIGNAL(PWM_INTERRUPT)
   
   // base waveform
   fp = g_phase >> 3; // keep fp between zero and 2047
-  ssample = 0;
+  sample = 0;
   if (g_wave_type < 2)
   {
     if (g_wave_type == 0) { // rough sawtooth
-      ssample = (short)1023-(short)fp;
+      sample = (short)1023-(short)fp;
     }
     else { // sawtooth
-      ssample = (fp < 1024) ? (short)1023-(short)fp*2 : (short)fp*2-3072;
+      sample = (fp < 1024) ? (short)1023-(short)fp*2 : (short)fp*2-3072;
     }
   }
   //else if (g_wave_type == 2) { // sine
-  //  ssample = (short)pgm_read_word(&mysin_table[fp]);
+  //  sample = (short)pgm_read_word(&mysin_table[fp]);
   //}
   else { // square
-    ssample = (fp & 1024) ? 1023 : 0;
+    sample = (fp & 1024) ? 1023 : 0;
   }
   
-  // ssample is between -1024 and 1023
+  // sample is between -1024 and 1023
   
   //
   // low-pass filter
@@ -565,34 +565,40 @@ SIGNAL(PWM_INTERRUPT)
     }
     else if ((g_lpf_ramp > 0) && (g_lpf_ramp_cnt == (unsigned char)g_lpf_ramp)) {
       g_lpf_ramp_cnt = 0;
-      if (g_lpf_curr_freq + 1 != 0) g_lpf_curr_freq++;
+      if ((char)(g_lpf_curr_freq + 1) != 0) g_lpf_curr_freq++;
     }
     
-    if (g_lpf_curr_freq > 128) g_lpf_curr_freq = 128;
-    
-    g_lpf_prev_delta += (((short)ssample-(short)g_lpf_prev) / 0x100) * (short)g_lpf_curr_freq;
-    //g_lpf_prev_delta -= (g_lpf_prev_delta * g_lpf_resonance / 0xff);
+    //
+    // since sample and g_lpf_prev are both between -1024 and 1023,
+    // we can be sure that g_lpf_prev_delta will not be
+    // incremented/decremented by more than 2047
+    //
+    g_lpf_prev_delta += (((short)sample-(short)g_lpf_prev) / 0x100) * (short)g_lpf_curr_freq;
+    if (g_lpf_prev_delta > 2047) g_lpf_prev_delta = 2047;
+    else if (g_lpf_prev_delta < -2048) g_lpf_prev_delta = -2048;
+    // skip the resonance shit for now (?)
+    // g_lpf_prev_delta -= (g_lpf_prev_delta / 0x10 * (short)g_lpf_resonance / 0x10);
     g_lpf_prev += g_lpf_prev_delta;
     
     if (g_lpf_prev > 1023) g_lpf_prev = 1023;
     if (g_lpf_prev < -1024) g_lpf_prev = -1024;
     
     // filter output
-    ssample = g_lpf_prev;
+    sample = g_lpf_prev;
   }
   else {
-    g_lpf_prev = ssample;
+    g_lpf_prev = sample;
     g_lpf_prev_delta = 0;
   }
   
   // now sample is between -1024 and 1023
   // scale it between -128 and 127
-  ssample=ssample/8;
+  sample = sample >> 3;
   
   // adjust with the volume envelope
-  ssample *= env_vol;
-  ssample /= 256;
+  sample *= env_vol;
+  sample = sample >> 8;
   
-  PWM_VALUE=ssample + 128;
+  PWM_VALUE=sample + 128;
 }
 

@@ -360,7 +360,7 @@ void setup()
   // Set the compare register (OCR1A).
   // OCR1A is a 16-bit register, so we have to do this with
   // interrupts disabled to be safe.
-  OCR1A = 1953;    // 16e6 / 8192
+  OCR1A = 976;    // 16e6 / 16384
   
   // Enable interrupt when TCNT1 == OCR1A (p.136)
   TIMSK1 |= _BV(OCIE1A);
@@ -410,7 +410,7 @@ void loop()
     reset_sample();
     g_env_stage = 0;
   }
-  else if ((g_button_status == 1) && (new_status == 0) && (g_env_stage == 1)) {
+  else if ((g_button_status == 1) && (new_status == 0) && (g_env_stage != 3)) {
     g_env_stage = 2;
   }
 
@@ -514,9 +514,9 @@ SIGNAL(PWM_INTERRUPT)
   //
   
   g_phase += vibrated_freq;
-  if (g_phase >= 8192)
+  if (g_phase & 0xC000)
   {
-    g_phase %= 8192;
+    g_phase &= 0x3FFF;
     
     //
     // wave length wraparound. this is a good time to make changes in the frequency
@@ -537,7 +537,7 @@ SIGNAL(PWM_INTERRUPT)
   //
   
   // base waveform
-  fp = g_phase/4; // keep fp between zero and 2047
+  fp = g_phase >> 3; // keep fp between zero and 2047
   ssample = 0;
   if (g_wave_type < 2)
   {

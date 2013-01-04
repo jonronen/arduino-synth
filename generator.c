@@ -24,8 +24,8 @@ static unsigned char g_wave_type;
 // tone frequency
 static unsigned short g_base_freq;
 static unsigned short g_curr_freq;
-static unsigned short g_freq_ramp;
-static unsigned short g_freq_ramp_cnt;
+static unsigned char g_freq_ramp;
+static unsigned char g_freq_ramp_cnt;
 
 // base frequency generation
 static unsigned short g_phase;
@@ -40,6 +40,7 @@ static unsigned char g_lpf_resonance;
 static unsigned char g_lpf_base_freq;
 static unsigned char g_lpf_curr_freq;
 static char g_lpf_ramp;
+static unsigned char g_lpf_ramp_cnt;
 static short g_lpf_prev;
 static short g_lpf_prev_delta;
 
@@ -51,9 +52,6 @@ static short g_vib_fix_accum;
 
 // button status
 static uint8_t g_button_status;
-
-// debugging
-static unsigned short g_cnt;
 
 static const short phase_to_delta[4] = {1,-1,-1,1};
 
@@ -376,9 +374,9 @@ void setup()
   g_freq_ramp = 0;
   g_freq_ramp_cnt = 0;
 
-  g_lpf_base_freq = 255;
+  g_lpf_base_freq = 0;
   g_lpf_ramp = 0;
-  g_lpf_resonance = 255;
+  g_lpf_resonance = 0;
   
   g_vib_speed = 0;
   g_vib_strength = 0;
@@ -386,8 +384,6 @@ void setup()
   // start playing
   reset_sample();
   
-  g_cnt = 0;
-
   // input #1
   pinMode(4,INPUT);
   digitalWrite(4,HIGH);
@@ -401,8 +397,8 @@ void loop()
   // The loop is pretty simple - it just updates the parameters
   g_vib_speed = analogRead(VIBRATO_SPEED_CTRL) / 4;
   g_vib_strength = analogRead(VIBRATO_DEPTH_CTRL) / 4;
-  //g_lpf_base_freq = analogRead(LOWPASS_FREQ_CTRL) / 4;
-  //g_lpf_ramp = analogRead(LOWPASS_RAMP_CTRL) / 4;
+  g_lpf_base_freq = analogRead(LOWPASS_FREQ_CTRL) / 4;
+  g_lpf_ramp = (char)((short)analogRead(LOWPASS_RAMP_CTRL) / 4 - 0x80);
   //g_lpf_resonance = analogRead(LOWPASS_RESONANCE_CTRL) / 4;
 
   new_status = digitalRead(4)==LOW ? 1 : 0;
@@ -461,8 +457,6 @@ SIGNAL(PWM_INTERRUPT)
   unsigned char env_vol;
   unsigned short vibrated_freq;
   short vib_fix;
-  
-  g_cnt++;
   
   // use another oscillator with a lower frequency for the vibrato
   g_vib_phase += g_vib_speed;
@@ -562,19 +556,26 @@ SIGNAL(PWM_INTERRUPT)
   //
   
   if (g_lpf_base_freq != 255) {
+    // to avoid ramping the low-pass frequency too quickly, use a counter
+    g_lpf_ramp_cnt++;
     // adjust the low-pass filter current frequency
-    if ((g_lpf_ramp < 0) && ((unsigned char)(-g_lpf_ramp) > g_lpf_curr_freq)) {
-      g_lpf_curr_freq = 0;
+    if ((g_lpf_ramp < 0) && (g_lpf_ramp_cnt == (unsigned char)-g_lpf_ramp)) {
+      g_lpf_ramp_cnt = 0;
+      if (g_lpf_curr_freq) g_lpf_curr_freq--;
     }
-    else {
-      g_lpf_curr_freq += g_lpf_ramp;
+    else if ((g_lpf_ramp > 0) && (g_lpf_ramp_cnt == (unsigned char)g_lpf_ramp)) {
+      g_lpf_ramp_cnt = 0;
+      if (g_lpf_curr_freq + 1 != 0) g_lpf_curr_freq++;
     }
     
     if (g_lpf_curr_freq > 128) g_lpf_curr_freq = 128;
     
-    g_lpf_prev_delta += ((((short)ssample-(short)g_lpf_prev) / 0x10) * g_lpf_curr_freq) / 0x10;
-    g_lpf_prev_delta = g_lpf_prev_delta * g_lpf_resonance / 0xff;
+    g_lpf_prev_delta += (((short)ssample-(short)g_lpf_prev) / 0x100) * (short)g_lpf_curr_freq;
+    //g_lpf_prev_delta -= (g_lpf_prev_delta * g_lpf_resonance / 0xff);
     g_lpf_prev += g_lpf_prev_delta;
+    
+    if (g_lpf_prev > 1023) g_lpf_prev = 1023;
+    if (g_lpf_prev < -1024) g_lpf_prev = -1024;
     
     // filter output
     ssample = g_lpf_prev;
@@ -591,9 +592,6 @@ SIGNAL(PWM_INTERRUPT)
   // adjust with the volume envelope
   ssample *= env_vol;
   ssample /= 256;
-  
-  if(ssample>127) ssample=127;
-  if(ssample<-128) ssample=-128;
   
   PWM_VALUE=ssample + 128;
 }

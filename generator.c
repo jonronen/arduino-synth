@@ -2,6 +2,7 @@
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <avr/pgmspace.h>
+#include "Arduino.h"
 
 #define PWM_PIN       11
 #define PWM_VALUE     OCR2A
@@ -13,56 +14,51 @@
 #define LOWPASS_RAMP_CTRL 3
 #define LOWPASS_RESONANCE_CTRL 4
 
-// 1 for sawtooth, 2 for sine
-unsigned char wave_type;
+void setup();
+void loop();
+static void reset_sample();
+
+// 0 for rough sawtooth, 1 for sawtooth, 2 for sine, 3 for square
+static unsigned char g_wave_type;
 
 // tone frequency
-unsigned short g_base_freq;
-unsigned short g_curr_freq;
-unsigned short g_freq_ramp;
-unsigned short g_freq_ramp_cnt;
-
-// should I play something
-unsigned char g_playing_sample;
+static unsigned short g_base_freq;
+static unsigned short g_curr_freq;
+static unsigned short g_freq_ramp;
+static unsigned short g_freq_ramp_cnt;
 
 // base frequency generation
-unsigned short g_phase;
-unsigned short g_fperiod;
-unsigned short g_fmaxperiod;
-unsigned short g_period;
+static unsigned short g_phase;
 
 // envelope
-unsigned char g_env_stage;
-unsigned short g_env_time;
-unsigned short g_env_lengths[2];
+static unsigned char g_env_stage;
+static unsigned short g_env_time;
+static unsigned short g_env_lengths[2];
 
 // low-pass filter
-unsigned char g_lpf_resonance;
-unsigned char g_lpf_base_freq;
-unsigned char g_lpf_curr_freq;
-char g_lpf_ramp;
-short g_lpf_prev;
-short g_lpf_prev_delta;
-
-// high-pass filter
-unsigned char g_hpf_freq;
-char g_hpf_ramp;
-float fltphp;
-float flthp;
-float flthp_d;
+static unsigned char g_lpf_resonance;
+static unsigned char g_lpf_base_freq;
+static unsigned char g_lpf_curr_freq;
+static char g_lpf_ramp;
+static short g_lpf_prev;
+static short g_lpf_prev_delta;
 
 // vibrato
-unsigned short g_vib_phase;
-unsigned char g_vib_strength;
-unsigned char g_vib_speed;
-short g_vib_fix_accum;
+static unsigned short g_vib_phase;
+static unsigned char g_vib_strength;
+static unsigned char g_vib_speed;
+static short g_vib_fix_accum;
+
+// button status
+static uint8_t g_button_status;
 
 // debugging
-unsigned short g_cnt;
+static unsigned short g_cnt;
 
-const short phase_to_delta[4] = {1,-1,-1,1};
+static const short phase_to_delta[4] = {1,-1,-1,1};
 
-const short mysin_table[2048] PROGMEM = {
+/* TODO: for some reason, this doesn't work properly
+const prog_int16_t mysin_table[2048] = {
    0,  3,  6,  9,  12,  15,  18,  21,  
    25,  28,  31,  34,  37,  40,  43,  47,  
    50,  53,  56,  59,  62,  65,  69,  72,  
@@ -320,129 +316,141 @@ const short mysin_table[2048] PROGMEM = {
    -50,  -47,  -43,  -40,  -37,  -34,  -31,  -28,  
    -25,  -21,  -18,  -15,  -12,  -9,  -6,  -3, 
 };
-
-
+*/
 
 void setup()
 {
-    pinMode(PWM_PIN, OUTPUT);
-    
-    // Set up Timer 2 to do pulse width modulation on the speaker
-    // pin.
-    
-    // Use internal clock (datasheet p.160)
-    ASSR &= ~(_BV(EXCLK) | _BV(AS2));
-    
-    // Set fast PWM mode  (p.157)
-    TCCR2A |= _BV(WGM21) | _BV(WGM20);
-    TCCR2B &= ~_BV(WGM22);
-    
-    // Do non-inverting PWM on pin OC2A (p.155)
-    // On the Arduino this is pin 11.
-    TCCR2A = (TCCR2A | _BV(COM2A1)) & ~_BV(COM2A0);
-    TCCR2A &= ~(_BV(COM2B1) | _BV(COM2B0));
-    
-    // No prescaler (p.158)
-    TCCR2B = (TCCR2B & ~(_BV(CS12) | _BV(CS11))) | _BV(CS10);
-    
-    // Set initial pulse width to the first sample.
-    OCR2A = 0x80;
+  pinMode(PWM_PIN, OUTPUT);
   
-    // Set up Timer 1 to send a sample every interrupt.
-    
-    cli();
-    
-    // Set CTC mode (Clear Timer on Compare Match) (p.133)
-    // Have to set OCR1A *after*, otherwise it gets reset to 0!
-    TCCR1B = (TCCR1B & ~_BV(WGM13)) | _BV(WGM12);
-    TCCR1A = TCCR1A & ~(_BV(WGM11) | _BV(WGM10));
-    
-    // No prescaler (p.134)
-    TCCR1B = (TCCR1B & ~(_BV(CS12) | _BV(CS11))) | _BV(CS10);
-    
-    // Set the compare register (OCR1A).
-    // OCR1A is a 16-bit register, so we have to do this with
-    // interrupts disabled to be safe.
-    OCR1A = 1953;    // 16e6 / 8192
-    
-    // Enable interrupt when TCNT1 == OCR1A (p.136)
-    TIMSK1 |= _BV(OCIE1A);
-    sei();
-    
-    // set up the initial values for all the controls
-    wave_type = 1; // sawtooth
+  // Set up Timer 2 to do pulse width modulation on the speaker
+  // pin.
+  
+  // Use internal clock (datasheet p.160)
+  ASSR &= ~(_BV(EXCLK) | _BV(AS2));
+  
+  // Set fast PWM mode  (p.157)
+  TCCR2A |= _BV(WGM21) | _BV(WGM20);
+  TCCR2B &= ~_BV(WGM22);
+  
+  // Do non-inverting PWM on pin OC2A (p.155)
+  // On the Arduino this is pin 11.
+  TCCR2A = (TCCR2A | _BV(COM2A1)) & ~_BV(COM2A0);
+  TCCR2A &= ~(_BV(COM2B1) | _BV(COM2B0));
+  
+  // No prescaler (p.158)
+  TCCR2B = (TCCR2B & ~(_BV(CS12) | _BV(CS11))) | _BV(CS10);
+  
+  // Set initial pulse width to the first sample.
+  OCR2A = 0x80;
+  
+  // Set up Timer 1 to send a sample every interrupt.
+  
+  cli();
+  
+  TIMSK0 &= (~TOIE0); // disable Timer0 - this means that delay() is no longer available
+  
+  // Set CTC mode (Clear Timer on Compare Match) (p.133)
+  // Have to set OCR1A *after*, otherwise it gets reset to 0!
+  TCCR1B = (TCCR1B & ~_BV(WGM13)) | _BV(WGM12);
+  TCCR1A = TCCR1A & ~(_BV(WGM11) | _BV(WGM10));
+  
+  // No prescaler (p.134)
+  TCCR1B = (TCCR1B & ~(_BV(CS12) | _BV(CS11))) | _BV(CS10);
+  
+  // Set the compare register (OCR1A).
+  // OCR1A is a 16-bit register, so we have to do this with
+  // interrupts disabled to be safe.
+  OCR1A = 1953;    // 16e6 / 8192
+  
+  // Enable interrupt when TCNT1 == OCR1A (p.136)
+  TIMSK1 |= _BV(OCIE1A);
+  sei();
+  
+  // set up the initial values for all the controls
+  g_wave_type = 1; // sawtooth
 
-    g_env_lengths[0] = 1000;
-    g_env_lengths[1] = 1500;
+  g_env_lengths[0] = 1000;
+  g_env_lengths[1] = 1500;
 
-    g_base_freq = 440;
-    g_freq_ramp = 0;
-    g_freq_ramp_cnt = 0;
+  g_base_freq = 440;
+  g_freq_ramp = 0;
+  g_freq_ramp_cnt = 0;
 
-    g_lpf_base_freq = 255;
-    g_lpf_ramp = 0;
-    g_lpf_resonance = 180; // test - change this later
-    g_hpf_freq = 0;
-    g_hpf_ramp = 0;
+  g_lpf_base_freq = 255;
+  g_lpf_ramp = 0;
+  g_lpf_resonance = 255;
+  
+  g_vib_speed = 0;
+  g_vib_strength = 0;
+  
+  // start playing
+  reset_sample();
+  
+  g_cnt = 0;
 
-    g_vib_speed = 0;
-    g_vib_strength = 0; // test - remove later
-    
-    // start playing
-    reset_sample(0);
-    
-    g_cnt = 0;
+  // input #1
+  pinMode(4,INPUT);
+  digitalWrite(4,HIGH);
+  g_button_status = 0; // no buttons are pressed
 }
 
-void loop() {
-    // The loop is pretty simple - it just updates the parameters
-    //g_lpf_base_freq = analogRead(LOWPASS_FREQ_CTRL) / 4;
-    //g_lpf_ramp = analogRead(LOWPASS_RAMP_CTRL) / 4;
-    //g_lpf_resonance = analogRead(LOWPASS_RESONANCE_CTRL) / 4;
-    g_vib_speed = analogRead(VIBRATO_SPEED_CTRL) / 4;
-    g_vib_strength = analogRead(VIBRATO_DEPTH_CTRL) / 4;
+void loop()
+{
+  uint8_t new_status; 
+
+  // The loop is pretty simple - it just updates the parameters
+  g_vib_speed = analogRead(VIBRATO_SPEED_CTRL) / 4;
+  g_vib_strength = analogRead(VIBRATO_DEPTH_CTRL) / 4;
+  //g_lpf_base_freq = analogRead(LOWPASS_FREQ_CTRL) / 4;
+  //g_lpf_ramp = analogRead(LOWPASS_RAMP_CTRL) / 4;
+  //g_lpf_resonance = analogRead(LOWPASS_RESONANCE_CTRL) / 4;
+
+  new_status = digitalRead(4)==LOW ? 1 : 0;
+  if ((g_button_status == 0) && (new_status == 1)) {
+    reset_sample();
+    g_env_stage = 0;
+  }
+  else if ((g_button_status == 1) && (new_status == 0) && (g_env_stage == 1)) {
+    g_env_stage = 2;
+  }
+
+  g_button_status = new_status;
 
 /*
-    Slider(xpos, (ypos++)*18, p_env_attack, 0, "ATTACK TIME");
-    Slider(xpos, (ypos++)*18, p_env_decay, 0, "DECAY TIME");
+  Slider(xpos, (ypos++)*18, p_env_attack, 0, "ATTACK TIME");
+  Slider(xpos, (ypos++)*18, p_env_decay, 0, "DECAY TIME");
 
-    Slider(xpos, (ypos++)*18, p_base_freq, 0, "START FREQUENCY");
-    Slider(xpos, (ypos++)*18, p_freq_ramp, 1, "SLIDE");
+  Slider(xpos, (ypos++)*18, p_base_freq, 0, "START FREQUENCY");
+  Slider(xpos, (ypos++)*18, p_freq_ramp, 1, "SLIDE");
 
-    Slider(xpos, (ypos++)*18, p_vib_strength, 0, "VIBRATO DEPTH");
-    Slider(xpos, (ypos++)*18, p_vib_speed, 0, "VIBRATO SPEED");
+  Slider(xpos, (ypos++)*18, p_vib_strength, 0, "VIBRATO DEPTH");
+  Slider(xpos, (ypos++)*18, p_vib_speed, 0, "VIBRATO SPEED");
 
-    Slider(xpos, (ypos++)*18, p_lpf_freq, 0, "LP FILTER CUTOFF");
-    Slider(xpos, (ypos++)*18, p_lpf_ramp, 1, "LP FILTER CUTOFF SWEEP");
-    Slider(xpos, (ypos++)*18, p_lpf_resonance, 0, "LP FILTER RESONANCE");
-    Slider(xpos, (ypos++)*18, p_hpf_freq, 0, "HP FILTER CUTOFF");
-    Slider(xpos, (ypos++)*18, p_hpf_ramp, 1, "HP FILTER CUTOFF SWEEP");
+  Slider(xpos, (ypos++)*18, p_lpf_freq, 0, "LP FILTER CUTOFF");
+  Slider(xpos, (ypos++)*18, p_lpf_ramp, 1, "LP FILTER CUTOFF SWEEP");
+  Slider(xpos, (ypos++)*18, p_lpf_resonance, 0, "LP FILTER RESONANCE");
+  Slider(xpos, (ypos++)*18, p_hpf_freq, 0, "HP FILTER CUTOFF");
+  Slider(xpos, (ypos++)*18, p_hpf_ramp, 1, "HP FILTER CUTOFF SWEEP");
 */
 }
 
-void reset_sample(int restart)
+static void reset_sample()
 {
-    int i;
-
-    g_playing_sample = 1;
-
-    g_phase = 0;
-    g_curr_freq = g_base_freq;
-    
-    // reset filters
-    g_lpf_prev = 0;
-    g_lpf_prev_delta = 0;
-    g_lpf_curr_freq = g_lpf_base_freq;
-    //fltphp = 0;
-    //flthp_d = 1.0+g_hpf_ramp*0.0003f;
-    
-    // reset vibrato
-    g_vib_phase = 0;
-    g_vib_fix_accum = 0;
-    
-    // reset envelope
-    g_env_stage=0;
-    g_env_time=0;
+  g_phase = 0;
+  g_curr_freq = g_base_freq;
+  
+  // reset filters
+  g_lpf_prev = 0;
+  g_lpf_prev_delta = 0;
+  g_lpf_curr_freq = g_lpf_base_freq;
+  
+  // reset vibrato
+  g_vib_phase = 0;
+  g_vib_fix_accum = 0;
+  
+  // reset envelope
+  g_env_stage=3;
+  g_env_time=0;
 }
 
 /* interrupt handler - that's where the synthesis happens */
@@ -453,146 +461,140 @@ SIGNAL(PWM_INTERRUPT)
   unsigned char env_vol;
   unsigned short vibrated_freq;
   short vib_fix;
-
+  
   g_cnt++;
-
-  if(g_playing_sample) {
-    // frequency envelopes/arpeggios
-    // restore later (?)
+  
+  // use another oscillator with a lower frequency for the vibrato
+  g_vib_phase += g_vib_speed;
+  
+  if(g_vib_strength > 0)
+  {
+    // vib_fix should be between -0x80 and 0x7f
+    g_vib_fix_accum += phase_to_delta[g_vib_phase/0x4000];
+    vib_fix = ((g_vib_fix_accum / 0x80) * (short)g_vib_strength) / 0x10;
     
-    // use another oscillator with a lower frequency for the vibrato
-    g_vib_phase += g_vib_speed;
-    
-    if(g_vib_strength > 0)
-    {
-      // vib_fix should be between -0x80 and 0x7f
-      g_vib_fix_accum += phase_to_delta[g_vib_phase/0x4000];
-      vib_fix = ((g_vib_fix_accum / 0x80) * (short)g_vib_strength) / 0x10;
-      
-      // fix the frequency according to the vibrato
-      if ((vib_fix < 0) && (-vib_fix >= g_curr_freq)) vibrated_freq = 1;
-      else vibrated_freq = g_curr_freq + vib_fix;
-    }
-    else {
-      vibrated_freq = g_curr_freq;
-    }
-
-    //
-    // volume envelope
-    //
-
-    // compute by stage, keeping env_vol between zero and 0xff
+    // fix the frequency according to the vibrato
+    if ((vib_fix < 0) && ((unsigned short)(-vib_fix) >= g_curr_freq)) vibrated_freq = 1;
+    else vibrated_freq = g_curr_freq + vib_fix;
+  }
+  else {
+    vibrated_freq = g_curr_freq;
+  }
+  
+  //
+  // volume envelope
+  //
+  
+  // compute by stage, keeping env_vol between zero and 0xff
+  if (g_env_stage == 0) {
     g_env_time++;
-    if (g_env_time > g_env_lengths[g_env_stage])
-    {
-        g_env_time=0;
-        g_env_stage++;
-        if (g_env_stage == 2)
-            reset_sample(1);
+    if (g_env_time >= g_env_lengths[0]) {
+      g_env_time = 0;
+      g_env_stage = 1;
     }
-    if(g_env_stage==0)
-        env_vol=(unsigned char)(g_env_time / (g_env_lengths[0]/0x100 + 1));
-    else
-        env_vol=255-(unsigned char)(g_env_time / (g_env_lengths[1]/0x100 + 1));
-
-    // high-pass filter adjustments
-/*
-    if(flthp_d!=0.0f)
-    {
-        flthp*=flthp_d;
-        if(flthp<0.00001f) flthp=0.00001f;
-        if(flthp>0.1f) flthp=0.1f;
+    env_vol=(unsigned char)(g_env_time / (g_env_lengths[0]/0x100 + 1));
+  }
+  else if (g_env_stage == 2) {
+    g_env_time++;
+    if (g_env_time >= g_env_lengths[1]) {
+      g_env_time = 0;
+      g_env_stage = 3;
     }
-*/
-   
+    env_vol=255-(unsigned char)(g_env_time / (g_env_lengths[1]/0x100 + 1));
+  }
+  else if (g_env_stage == 1) {
+    env_vol = 255;
+  }
+  else {
+    env_vol = 0;
+  }
+  
+  //
+  // phase of the current wave
+  //
+  
+  g_phase += vibrated_freq;
+  if (g_phase >= 8192)
+  {
+    g_phase %= 8192;
+    
     //
-    // current sample computation
+    // wave length wraparound. this is a good time to make changes in the frequency
     //
     
-    ssample = 0;
-    g_phase += vibrated_freq;
-    if (g_phase >= 8192)
-    {
-      g_phase %= 8192;
-      
-      //
-      // wave length wraparound. this is a good time to make changes in the frequency
-      //
-      
-      // fix the frequency according to the ramp
-      if (g_freq_ramp) {
-        g_freq_ramp_cnt++;
-        if (g_freq_ramp_cnt == g_freq_ramp) {
-          g_freq_ramp_cnt = 0;
-          g_curr_freq += 1;
-        }
+    // fix the frequency according to the ramp
+    if (g_freq_ramp && (g_env_stage == 1)) {
+      g_freq_ramp_cnt++;
+      if (g_freq_ramp_cnt == g_freq_ramp) {
+        g_freq_ramp_cnt = 0;
+        g_curr_freq += 1;
       }
     }
-    
-    // base waveform
-    fp = g_phase/4; // keep fp between zero and 2047
-    switch (wave_type)
-    {
-    case 0: // rough sawtooth
+  }
+  
+  //
+  // current sample computation
+  //
+  
+  // base waveform
+  fp = g_phase/4; // keep fp between zero and 2047
+  ssample = 0;
+  if (g_wave_type < 2)
+  {
+    if (g_wave_type == 0) { // rough sawtooth
       ssample = (short)1023-(short)fp;
-      break;
-    case 1: // sawtooth
-      ssample = (fp < 1024) ? (short)1023-(short)fp*2 : (short)fp*2-3072;
-      break;
-    case 2: // sine
-      ssample = (short)pgm_read_word(&mysin_table[fp]);
-      break;
-    case 3: // square
-      ssample = (short)1023 * (short)(fp/1024);
-      break;
     }
-    
-    // ssample is between -1024 and 1023
-    
-    // low-pass filter
-    //pp=fltp; // save this value for the high-pass filter
-    
+    else { // sawtooth
+      ssample = (fp < 1024) ? (short)1023-(short)fp*2 : (short)fp*2-3072;
+    }
+  }
+  //else if (g_wave_type == 2) { // sine
+  //  ssample = (short)pgm_read_word(&mysin_table[fp]);
+  //}
+  else { // square
+    ssample = (fp & 1024) ? 1023 : 0;
+  }
+  
+  // ssample is between -1024 and 1023
+  
+  //
+  // low-pass filter
+  //
+  
+  if (g_lpf_base_freq != 255) {
     // adjust the low-pass filter current frequency
-    if ((g_lpf_ramp < 0) && (-g_lpf_ramp > g_lpf_curr_freq)) {
+    if ((g_lpf_ramp < 0) && ((unsigned char)(-g_lpf_ramp) > g_lpf_curr_freq)) {
       g_lpf_curr_freq = 0;
     }
     else {
       g_lpf_curr_freq += g_lpf_ramp;
     }
+    
     if (g_lpf_curr_freq > 128) g_lpf_curr_freq = 128;
     
-    if (g_lpf_base_freq != 255)
-    {
-      g_lpf_prev_delta += (((ssample-g_lpf_prev)/0x10)*g_lpf_curr_freq)/0x10;
-      g_lpf_prev_delta = (g_lpf_prev_delta*(0xff-g_lpf_resonance)) / 0x100;
-    }
-    else
-    {
-      g_lpf_prev = ssample;
-      g_lpf_prev_delta = 0;
-    }
+    g_lpf_prev_delta += ((((short)ssample-(short)g_lpf_prev) / 0x10) * g_lpf_curr_freq) / 0x10;
+    g_lpf_prev_delta = g_lpf_prev_delta * g_lpf_resonance / 0xff;
     g_lpf_prev += g_lpf_prev_delta;
     
-    // hp filter
-    //fltphp+=fltp-pp;
-    //fltphp-=fltphp*flthp;
-    // final accumulation and envelope application
-    //ssample=fltphp*env_vol;
+    // filter output
     ssample = g_lpf_prev;
-    
-    
-    // now sample is between -1024 and 1023
-    // scale it between -128 and 127
-    ssample=ssample/8;
-    
-    // adjust with the volume envelope
-    ssample *= env_vol;
-    ssample /= 256;
-
-    if(ssample>127) ssample=127;
-    if(ssample<-128) ssample=-128;
-    /* check if this is the right register */
-    PWM_VALUE=ssample + 128;
   }
+  else {
+    g_lpf_prev = ssample;
+    g_lpf_prev_delta = 0;
+  }
+  
+  // now sample is between -1024 and 1023
+  // scale it between -128 and 127
+  ssample=ssample/8;
+  
+  // adjust with the volume envelope
+  ssample *= env_vol;
+  ssample /= 256;
+  
+  if(ssample>127) ssample=127;
+  if(ssample<-128) ssample=-128;
+  
+  PWM_VALUE=ssample + 128;
 }
 

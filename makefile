@@ -23,7 +23,7 @@ generator.o: generator.c
 	avr-g++ $(GPP_FLAGS) generator.c
 
 upload: generator.hex
-	/usr/share/arduino/hardware/tools/avrdude -C/usr/share/arduino/hardware/tools/avrdude.conf -v -patmega328p -carduino -P/dev/ttyACM1 -b115200 -D -Uflash:w:generator.hex:i
+	/usr/share/arduino/hardware/tools/avrdude -C/usr/share/arduino/hardware/tools/avrdude.conf -v -patmega328p -carduino -P/dev/ttyACM0 -b115200 -D -Uflash:w:generator.hex:i
 
 clean:
 	rm -f *.o *.hex *.elf

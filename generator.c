@@ -4,8 +4,16 @@
 #include <avr/pgmspace.h>
 #include "Arduino.h"
 
+// digital inputs
+#define PLAY_PIN      4
+#define DIST_PIN      5
+#define TREM_PIN      6
+
+// "analog" output
 #define PWM_PIN       11
 #define PWM_VALUE     OCR2A
+
+// interrupt on timer comparison
 #define PWM_INTERRUPT TIMER1_COMPA_vect
 
 #define VIBRATO_SPEED_CTRL 0
@@ -50,10 +58,34 @@ static unsigned char g_vib_strength;
 static unsigned char g_vib_speed;
 static short g_vib_fix_accum;
 
-// button status
+// tremolo and distortion
+static unsigned short g_interrupt_cnt;
+
+// buttons
 static uint8_t g_button_status;
+static uint8_t g_dist_status;
+static uint8_t g_trem_status;
 
 static const short phase_to_delta[4] = {1,-1,-1,1};
+
+static const unsigned char g_rand_shit[256] = {
+  127, 245, 223, 255, 254, 255, 255, 255, 255, 191, 254, 255, 255, 255, 255, 223,
+  255, 191, 254, 247, 255, 255, 255, 255, 223, 255, 61,  255, 183, 255, 255, 255,
+  255, 191, 249, 255, 255, 245, 255, 250, 215, 255, 255, 255, 127, 255, 255, 255,
+  255, 223, 255, 255, 255, 255, 255, 255, 255, 127, 255, 254, 243, 255, 239, 255,
+  237, 255, 255, 255, 255, 247, 255, 255, 255, 255, 187, 255, 251, 251, 255, 223,
+  255, 253, 255, 255, 255, 255, 127, 255, 191, 255, 255, 255, 255, 255, 223, 255,
+  255, 251, 123, 255, 253, 254, 239, 251, 255, 255, 223, 255, 255, 255, 255, 255,
+  251, 255, 251, 223, 255, 231, 251, 255, 255, 255, 221, 255, 251, 255, 255, 223,
+  255, 219, 255, 245, 255, 255, 255, 255, 255, 255, 251, 255, 59,  255, 255, 223,
+  255, 191, 255, 127, 255, 223, 255, 127, 255, 255, 255, 255, 255, 255, 255, 119,
+  255, 255, 255, 253, 255, 255, 253, 255, 255, 254, 252, 247, 255, 255, 255, 62,
+  255, 251, 247, 255, 189, 255, 255, 255, 255, 126, 251, 253, 255, 255, 191, 255,
+  255, 127, 222, 255, 159, 255, 255, 249, 255, 255, 191, 255, 254, 255, 255, 255,
+  255, 207, 221, 251, 253, 255, 255, 255, 190, 191, 255, 255, 255, 255, 127, 255,
+  255, 243, 255, 247, 255, 255, 253, 255, 255, 223, 255, 255, 255, 251, 255, 255,
+  255, 191, 255, 254, 191, 255, 255, 255, 251, 255, 255, 191, 255, 255, 255, 255
+};
 
 /* TODO: for some reason, this doesn't work properly
 const prog_int16_t mysin_table[2048] = {
@@ -345,7 +377,8 @@ void setup()
   
   cli();
   
-  TIMSK0 &= (~TOIE0); // disable Timer0 - this means that delay() is no longer available
+  // disable Timer0 - this means that delay() is no longer available
+  TIMSK0 &= (~TOIE0);
   
   // Set CTC mode (Clear Timer on Compare Match) (p.133)
   // Have to set OCR1A *after*, otherwise it gets reset to 0!
@@ -374,8 +407,8 @@ void setup()
   g_freq_ramp = 0;
   g_freq_ramp_cnt = 0;
 
-  g_lpf_base_freq = 0;
-  g_lpf_ramp = 0;
+  g_lpf_base_freq = 200;
+  g_lpf_ramp = -120;
   g_lpf_resonance = 0;
   
   g_vib_speed = 0;
@@ -384,10 +417,20 @@ void setup()
   // start playing
   reset_sample();
   
-  // input #1
-  pinMode(4,INPUT);
-  digitalWrite(4,HIGH);
+  // input #1 - play note
+  pinMode(PLAY_PIN, INPUT);
+  digitalWrite(PLAY_PIN, HIGH);
   g_button_status = 0; // no buttons are pressed
+
+  // input #2 - distortion
+  pinMode(DIST_PIN, INPUT);
+  digitalWrite(DIST_PIN, HIGH);
+  g_dist_status = 0; // no buttons are pressed
+
+  // input #3 - tremolo
+  pinMode(TREM_PIN, INPUT);
+  digitalWrite(TREM_PIN, HIGH);
+  g_trem_status = 0; // no buttons are pressed
 }
 
 void loop()
@@ -401,7 +444,7 @@ void loop()
   g_lpf_ramp = (char)((short)analogRead(LOWPASS_RAMP_CTRL) / 4 - 0x80);
   //g_lpf_resonance = analogRead(LOWPASS_RESONANCE_CTRL) / 4;
 
-  new_status = digitalRead(4)==LOW ? 1 : 0;
+  new_status = digitalRead(PLAY_PIN)==LOW ? 1 : 0;
   if ((g_button_status == 0) && (new_status == 1)) {
     reset_sample();
     g_env_stage = 0;
@@ -411,6 +454,9 @@ void loop()
   }
 
   g_button_status = new_status;
+  
+  g_trem_status = digitalRead(TREM_PIN)==LOW ? 1 : 0;
+  g_dist_status = digitalRead(DIST_PIN)==LOW ? 1 : 0;
 
 /*
   Slider(xpos, (ypos++)*18, p_env_attack, 0, "ATTACK TIME");
@@ -434,15 +480,20 @@ static void reset_sample()
 {
   g_phase = 0;
   g_curr_freq = g_base_freq;
+  g_freq_ramp_cnt = 0;
   
   // reset filters
   g_lpf_prev = 0;
   g_lpf_prev_delta = 0;
   g_lpf_curr_freq = g_lpf_base_freq;
+  g_lpf_ramp_cnt = 0;
   
   // reset vibrato
   g_vib_phase = 0;
   g_vib_fix_accum = 0;
+  
+  // reset tremolo, distortion, and shit
+  g_interrupt_cnt = 0;
   
   // reset envelope
   g_env_stage=3;
@@ -503,6 +554,20 @@ SIGNAL(PWM_INTERRUPT)
     env_vol = 0;
   }
   
+  g_interrupt_cnt++;
+  // tremolo adjustments
+  if (g_trem_status) {
+    // do the shit at ~16Hz
+    if (g_interrupt_cnt & 0x200) {
+      env_vol /= 2;
+    }
+  }
+  
+  // distortion adjustments
+  if (g_dist_status) {
+    env_vol &= g_rand_shit[g_interrupt_cnt & 0xFF];
+  }
+  
   //
   // phase of the current wave
   //
@@ -546,7 +611,7 @@ SIGNAL(PWM_INTERRUPT)
   //  sample = (short)pgm_read_word(&mysin_table[fp]);
   //}
   else { // square
-    sample = (fp & 1024) ? 1023 : 0;
+    sample = (fp & 1024) ? 1023 : -1023;
   }
   
   // sample is between -1024 and 1023
@@ -568,6 +633,7 @@ SIGNAL(PWM_INTERRUPT)
       if ((char)(g_lpf_curr_freq + 1) != 0) g_lpf_curr_freq++;
     }
     
+    /*
     //
     // since sample and g_lpf_prev are both between -1024 and 1023,
     // we can be sure that g_lpf_prev_delta will not be
@@ -577,8 +643,14 @@ SIGNAL(PWM_INTERRUPT)
     if (g_lpf_prev_delta > 2047) g_lpf_prev_delta = 2047;
     else if (g_lpf_prev_delta < -2048) g_lpf_prev_delta = -2048;
     // skip the resonance shit for now (?)
-    // g_lpf_prev_delta -= (g_lpf_prev_delta / 0x10 * (short)g_lpf_resonance / 0x10);
+    g_lpf_prev_delta -= (g_lpf_prev_delta / 0x10 * (short)g_lpf_resonance / 0x10);
     g_lpf_prev += g_lpf_prev_delta;
+    */
+    
+    //
+    // low-pass filter without resonance
+    //
+    g_lpf_prev += (((short)sample-(short)g_lpf_prev) / 0x100) * (short)g_lpf_curr_freq;
     
     if (g_lpf_prev > 1023) g_lpf_prev = 1023;
     if (g_lpf_prev < -1024) g_lpf_prev = -1024;
@@ -593,12 +665,12 @@ SIGNAL(PWM_INTERRUPT)
   
   // now sample is between -1024 and 1023
   // scale it between -128 and 127
-  sample = sample >> 3;
+  sample = sample / 8;
   
   // adjust with the volume envelope
   sample *= env_vol;
-  sample = sample >> 8;
+  sample = sample / 256;
   
-  PWM_VALUE=sample + 128;
+  PWM_VALUE=(unsigned char)(sample + 128);
 }
 

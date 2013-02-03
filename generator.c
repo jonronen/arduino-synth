@@ -440,12 +440,12 @@ void setup()
   g_freq_ramp = 0;
   g_freq_ramp_cnt = 0;
 
-  g_lpf_base_freq = 200;
-  g_lpf_ramp = -120;
-  g_lpf_resonance = 0;
+  g_lpf_base_freq = 250; /* default value, for tests only */
+  g_lpf_ramp = -50; /* default value, for tests only */
+  g_lpf_resonance = 200; /* default value, for tests only */
   
-  g_vib_speed = 0;
-  g_vib_strength = 0;
+  g_vib_speed = 100; /* default value, for tests only */
+  g_vib_strength = 70; /* default value, for tests only */
   
   // start playing
   reset_sample();

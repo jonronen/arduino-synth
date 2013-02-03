@@ -445,7 +445,7 @@ void setup()
   g_lpf_resonance = 200; /* default value, for tests only */
   
   g_vib_speed = 100; /* default value, for tests only */
-  g_vib_strength = 70; /* default value, for tests only */
+  g_vib_strength = 50; /* default value, for tests only */
   
   // start playing
   reset_sample();

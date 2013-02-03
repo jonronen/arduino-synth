@@ -1,3 +1,36 @@
+/*
+ *
+ * Arduino Synth
+ * Copyright 2012-2013 Jon Ronen-Drori
+ *
+ *
+ * A simple Arduino-based one-note synthesizer
+ * with vibrato, low-pass filter, resonance,
+ * distortion, and tremolo
+ *
+ * Inspiration and pieces of code taken from:
+ * - Auduino (http://code.google.com/p/tinkerit/wiki/Auduino)
+ * - Arduino Octosynth (http://www.instructables.com/id/The-Arduino-OctoSynth/)
+ * - sfxr (http://www.drpetter.se/project_sfxr.html)
+ * - Speaker PCM (http://www.arduino.cc/playground/Code/PCMAudio)
+ *
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *
+ */
+
 
 #include <avr/io.h>
 #include <avr/interrupt.h>
@@ -442,7 +475,7 @@ void loop()
   g_vib_strength = analogRead(VIBRATO_DEPTH_CTRL) / 4;
   g_lpf_base_freq = analogRead(LOWPASS_FREQ_CTRL) / 4;
   g_lpf_ramp = (char)((short)analogRead(LOWPASS_RAMP_CTRL) / 4 - 0x80);
-  //g_lpf_resonance = analogRead(LOWPASS_RESONANCE_CTRL) / 4;
+  g_lpf_resonance = analogRead(LOWPASS_RESONANCE_CTRL) / 4;
 
   new_status = digitalRead(PLAY_PIN)==LOW ? 1 : 0;
   if ((g_button_status == 0) && (new_status == 1)) {
@@ -457,23 +490,6 @@ void loop()
   
   g_trem_status = digitalRead(TREM_PIN)==LOW ? 1 : 0;
   g_dist_status = digitalRead(DIST_PIN)==LOW ? 1 : 0;
-
-/*
-  Slider(xpos, (ypos++)*18, p_env_attack, 0, "ATTACK TIME");
-  Slider(xpos, (ypos++)*18, p_env_decay, 0, "DECAY TIME");
-
-  Slider(xpos, (ypos++)*18, p_base_freq, 0, "START FREQUENCY");
-  Slider(xpos, (ypos++)*18, p_freq_ramp, 1, "SLIDE");
-
-  Slider(xpos, (ypos++)*18, p_vib_strength, 0, "VIBRATO DEPTH");
-  Slider(xpos, (ypos++)*18, p_vib_speed, 0, "VIBRATO SPEED");
-
-  Slider(xpos, (ypos++)*18, p_lpf_freq, 0, "LP FILTER CUTOFF");
-  Slider(xpos, (ypos++)*18, p_lpf_ramp, 1, "LP FILTER CUTOFF SWEEP");
-  Slider(xpos, (ypos++)*18, p_lpf_resonance, 0, "LP FILTER RESONANCE");
-  Slider(xpos, (ypos++)*18, p_hpf_freq, 0, "HP FILTER CUTOFF");
-  Slider(xpos, (ypos++)*18, p_hpf_ramp, 1, "HP FILTER CUTOFF SWEEP");
-*/
 }
 
 static void reset_sample()
@@ -633,7 +649,13 @@ SIGNAL(PWM_INTERRUPT)
       if ((char)(g_lpf_curr_freq + 1) != 0) g_lpf_curr_freq++;
     }
     
-    /*
+    // start with the resonance - multiply g_lpf_prev_delta by the factor
+    g_lpf_prev_delta /= 0x10;
+    g_lpf_prev_delta *= g_lpf_resonance;
+    g_lpf_prev_delta /= 0x10;
+
+    //
+    // now add the low-pass part
     //
     // since sample and g_lpf_prev are both between -1024 and 1023,
     // we can be sure that g_lpf_prev_delta will not be
@@ -642,15 +664,9 @@ SIGNAL(PWM_INTERRUPT)
     g_lpf_prev_delta += (((short)sample-(short)g_lpf_prev) / 0x100) * (short)g_lpf_curr_freq;
     if (g_lpf_prev_delta > 2047) g_lpf_prev_delta = 2047;
     else if (g_lpf_prev_delta < -2048) g_lpf_prev_delta = -2048;
-    // skip the resonance shit for now (?)
-    g_lpf_prev_delta -= (g_lpf_prev_delta / 0x10 * (short)g_lpf_resonance / 0x10);
-    g_lpf_prev += g_lpf_prev_delta;
-    */
     
-    //
-    // low-pass filter without resonance
-    //
-    g_lpf_prev += (((short)sample-(short)g_lpf_prev) / 0x100) * (short)g_lpf_curr_freq;
+    // accumulate it to the filter's output
+    g_lpf_prev += g_lpf_prev_delta;
     
     if (g_lpf_prev > 1023) g_lpf_prev = 1023;
     if (g_lpf_prev < -1024) g_lpf_prev = -1024;

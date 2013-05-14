@@ -38,50 +38,58 @@
 #include "Arduino.h"
 
 // digital inputs
-#define PLAY_PIN      4
-#define DIST_PIN      5
-#define TREM_PIN      6
+#define TONE1_PIN       9
+#define TONE2_PIN       10
+#define TONE3_PIN       11
+#define TONE4_PIN       12
+#define TONE5_PIN       13
+
+#define LOWPASS_PIN     5
+#define FREQ_PIN        6
+#define DIST_PIN        7
+#define TREM_PIN        8
 
 // "analog" output
-#define PWM_PIN       11
-#define PWM_VALUE     OCR2A
+#define PWM_PIN       3
+#define PWM_VALUE     OCR2B
 
 // interrupt on timer comparison
 #define PWM_INTERRUPT TIMER1_COMPA_vect
 
-#define VIBRATO_SPEED_CTRL 0
-#define VIBRATO_DEPTH_CTRL 1
-#define LOWPASS_FREQ_CTRL 2
-#define LOWPASS_RAMP_CTRL 3
-#define LOWPASS_RESONANCE_CTRL 4
+#define ATTACK_CTRL 0
+#define RELEASE_CTRL 1
+#define VIBRATO_CTRL 2
+#define RESONANCE_CTRL 3
 
 void setup();
 void loop();
 static void reset_sample();
 
 // 0 for rough sawtooth, 1 for sawtooth, 2 for sine, 3 for square
-static unsigned char g_wave_type;
+static const unsigned char g_wave_type = 1;
 
 // tone frequency
 static unsigned short g_base_freq;
 static unsigned short g_curr_freq;
-static unsigned char g_freq_ramp;
-static unsigned char g_freq_ramp_cnt;
+static unsigned short g_freq_ramp_cnt;
 
 // base frequency generation
 static unsigned short g_phase;
 
+//
 // envelope
+//
+
+// type: 0=amplitude, 1=low-pass, 2=frequency
+static unsigned char g_env_type;
+// stage: 0=attack, 1=sustain, 2=release, 3=silence
 static unsigned char g_env_stage;
 static unsigned short g_env_time;
 static unsigned short g_env_lengths[2];
 
 // low-pass filter
 static unsigned char g_lpf_resonance;
-static unsigned char g_lpf_base_freq;
-static unsigned char g_lpf_curr_freq;
-static char g_lpf_ramp;
-static unsigned char g_lpf_ramp_cnt;
+static unsigned char g_lpf_freq;
 static short g_lpf_prev;
 static short g_lpf_prev_delta;
 
@@ -395,16 +403,16 @@ void setup()
   TCCR2A |= _BV(WGM21) | _BV(WGM20);
   TCCR2B &= ~_BV(WGM22);
   
-  // Do non-inverting PWM on pin OC2A (p.155)
-  // On the Arduino this is pin 11.
-  TCCR2A = (TCCR2A | _BV(COM2A1)) & ~_BV(COM2A0);
-  TCCR2A &= ~(_BV(COM2B1) | _BV(COM2B0));
+  // Do non-inverting PWM on pin OC2B (p.155)
+  // On the Arduino this is pin 3.
+  TCCR2A = (TCCR2A | _BV(COM2B1)) & ~_BV(COM2B0);
+  TCCR2A &= ~(_BV(COM2A1) | _BV(COM2A0));
   
   // No prescaler (p.158)
   TCCR2B = (TCCR2B & ~(_BV(CS12) | _BV(CS11))) | _BV(CS10);
   
   // Set initial pulse width to the first sample.
-  OCR2A = 0x80;
+  PWM_VALUE = 0x80;
   
   // Set up Timer 1 to send a sample every interrupt.
   
@@ -431,78 +439,134 @@ void setup()
   sei();
   
   // set up the initial values for all the controls
-  g_wave_type = 3; // square
 
-  g_env_lengths[0] = 1000;
-  g_env_lengths[1] = 1500;
+  g_env_lengths[0] = 1;
+  g_env_lengths[1] = 1;
+  g_env_type=0;
 
   g_base_freq = 440;
-  g_freq_ramp = 0;
   g_freq_ramp_cnt = 0;
 
-  g_lpf_base_freq = 250; /* default value, for tests only */
-  g_lpf_ramp = -50; /* default value, for tests only */
-  g_lpf_resonance = 200; /* default value, for tests only */
+  g_lpf_resonance = 0;
   
-  g_vib_speed = 100; /* default value, for tests only */
-  g_vib_strength = 50; /* default value, for tests only */
+  g_vib_speed = 100; /* default value, remains unchanged */
+  g_vib_strength = 0;
   
-  // start playing
+  // set the parameters but don't start playing
   reset_sample();
   
-  // input #1 - play note
-  pinMode(PLAY_PIN, INPUT);
-  digitalWrite(PLAY_PIN, HIGH);
+  // play notes
+  pinMode(TONE1_PIN, INPUT);
+  digitalWrite(TONE1_PIN, HIGH);
+  pinMode(TONE2_PIN, INPUT);
+  digitalWrite(TONE2_PIN, HIGH);
+  pinMode(TONE3_PIN, INPUT);
+  digitalWrite(TONE3_PIN, HIGH);
+  pinMode(TONE4_PIN, INPUT);
+  digitalWrite(TONE4_PIN, HIGH);
+  pinMode(TONE5_PIN, INPUT);
+  digitalWrite(TONE5_PIN, HIGH);
   g_button_status = 0; // no buttons are pressed
 
-  // input #2 - distortion
+  // distortion
   pinMode(DIST_PIN, INPUT);
   digitalWrite(DIST_PIN, HIGH);
   g_dist_status = 0; // no buttons are pressed
 
-  // input #3 - tremolo
+  // tremolo
   pinMode(TREM_PIN, INPUT);
   digitalWrite(TREM_PIN, HIGH);
   g_trem_status = 0; // no buttons are pressed
+}
+
+static unsigned char get_button_status()
+{
+  unsigned char ans = 0;
+  if (digitalRead(TONE1_PIN) == LOW) ans &= 0x01;
+  if (digitalRead(TONE2_PIN) == LOW) ans &= 0x02;
+  if (digitalRead(TONE3_PIN) == LOW) ans &= 0x04;
+  if (digitalRead(TONE4_PIN) == LOW) ans &= 0x08;
+  if (digitalRead(TONE5_PIN) == LOW) ans &= 0x10;
+  return ans;
+}
+
+static unsigned short get_base_freq(unsigned char status)
+{
+  if (status == 1) return 240;
+  if (status == 2) return 270;
+  if (status == 3) return 300;
+  if (status == 4) return 360;
+  return 405;
 }
 
 void loop()
 {
   uint8_t new_status; 
 
-  // The loop is pretty simple - it just updates the parameters
-  g_vib_speed = analogRead(VIBRATO_SPEED_CTRL) / 4;
-  g_vib_strength = analogRead(VIBRATO_DEPTH_CTRL) / 4;
-  g_lpf_base_freq = analogRead(LOWPASS_FREQ_CTRL) / 4;
-  g_lpf_ramp = (char)((short)analogRead(LOWPASS_RAMP_CTRL) / 4 - 0x80);
-  g_lpf_resonance = analogRead(LOWPASS_RESONANCE_CTRL) / 4;
+  //
+  // the loop updates the sound parameters
+  //
+  // since we don't want all the parameters updated when playing,
+  // some parameters are updated only on silence and on sustain,
+  // and others are updated only on silence
+  //
 
-  new_status = digitalRead(PLAY_PIN)==LOW ? 1 : 0;
-  if ((g_button_status == 0) && (new_status == 1)) {
-    reset_sample();
-    g_env_stage = 0;
-  }
-  else if ((g_button_status == 1) && (new_status == 0) && (g_env_stage != 3)) {
-    g_env_stage = 2;
+  // envelopes are updated only on silence and sustain
+  if ((g_env_stage != 0) && (g_env_stage != 2)) {
+    g_env_lengths[0] = analogRead(ATTACK_CTRL) * 4;
+    g_env_lengths[1] = analogRead(RELEASE_CTRL) * 4;
+    g_env_type = 
+      (digitalRead(LOWPASS_PIN) == LOW) ? 1 :
+      (digitalRead(FREQ_PIN) == LOW) ? 2 : 0;
   }
 
-  g_button_status = new_status;
-  
+  // vibrato and resonance are always welcome
+  g_vib_strength = analogRead(VIBRATO_CTRL) / 4;
+  g_lpf_resonance = analogRead(RESONANCE_CTRL) / 4;
+
+  // so are tremolo and distortion
   g_trem_status = digitalRead(TREM_PIN)==LOW ? 1 : 0;
   g_dist_status = digitalRead(DIST_PIN)==LOW ? 1 : 0;
+
+  // is the pitch released?
+  new_status = get_button_status();
+  if ((g_env_stage < 2) && (new_status == 0)) {
+    g_env_stage = 2;
+    g_button_status = 0;
+  }
+  // or is a different pitch selected?
+  else if (new_status && (new_status != g_button_status)) {
+    // filter the old pitch
+    new_status &= (~g_button_status);
+    // and select only one pitch
+    new_status &= (~(new_status-1));
+
+    g_button_status = new_status;
+
+    // now play the new pitch from scratch
+    cli();
+    g_base_freq = get_base_freq(new_status);
+    reset_sample();
+    g_env_stage = 0;
+    sei();
+  }
 }
 
 static void reset_sample()
 {
   g_phase = 0;
-  g_curr_freq = g_base_freq;
   g_freq_ramp_cnt = 0;
-  
+
+  g_curr_freq = g_base_freq;
+  if (g_env_type == 2) {
+    g_curr_freq = g_base_freq / (g_env_lengths[0]/16 + 1);
+    if (g_curr_freq < 40) g_curr_freq = 40;
+  }
+
   // reset filters
   g_lpf_prev = 0;
   g_lpf_prev_delta = 0;
-  g_lpf_curr_freq = g_lpf_base_freq;
-  g_lpf_ramp_cnt = 0;
+  g_lpf_freq = ((g_env_type == 1) ? 1 : 255); // zero if lpf envelope, else max
   
   // reset vibrato
   g_vib_phase = 0;
@@ -521,7 +585,8 @@ SIGNAL(PWM_INTERRUPT)
 {
   short sample;
   unsigned short fp;
-  unsigned char env_vol;
+  unsigned char env_vol = 0xff;
+  unsigned char* p_env_item;
   unsigned short vibrated_freq;
   short vib_fix;
   
@@ -543,33 +608,37 @@ SIGNAL(PWM_INTERRUPT)
   }
   
   //
-  // volume envelope
+  // volume/low-pass envelope
   //
-  
-  // compute by stage, keeping env_vol between zero and 0xff
-  if (g_env_stage == 0) {
-    g_env_time++;
-    if (g_env_time >= g_env_lengths[0]) {
-      g_env_time = 0;
-      g_env_stage = 1;
+
+  if (g_env_type < 2) {
+    p_env_item = (g_env_type==0) ? &env_vol : &g_lpf_freq;
+
+    // compute by stage, keeping *p_env_item between zero and 0xff
+    if (g_env_stage == 0) {
+      g_env_time++;
+      if (g_env_time >= g_env_lengths[0]) {
+        g_env_time = 0;
+        g_env_stage = 1;
+      }
+      *p_env_item=(unsigned char)(g_env_time / (g_env_lengths[0]/0x100 + 1));
     }
-    env_vol=(unsigned char)(g_env_time / (g_env_lengths[0]/0x100 + 1));
-  }
-  else if (g_env_stage == 2) {
-    g_env_time++;
-    if (g_env_time >= g_env_lengths[1]) {
-      g_env_time = 0;
-      g_env_stage = 3;
+    else if (g_env_stage == 2) {
+      g_env_time++;
+      if (g_env_time >= g_env_lengths[1]) {
+        g_env_time = 0;
+        g_env_stage = 3;
+      }
+      *p_env_item=255-(unsigned char)(g_env_time/ (g_env_lengths[1]/0x100 + 1));
     }
-    env_vol=255-(unsigned char)(g_env_time / (g_env_lengths[1]/0x100 + 1));
+    else if (g_env_stage == 1) {
+      *p_env_item = 255;
+    }
+    else {
+      *p_env_item = 0;
+    }
   }
-  else if (g_env_stage == 1) {
-    env_vol = 255;
-  }
-  else {
-    env_vol = 0;
-  }
-  
+
   g_interrupt_cnt++;
   // tremolo adjustments
   if (g_trem_status) {
@@ -598,11 +667,29 @@ SIGNAL(PWM_INTERRUPT)
     //
     
     // fix the frequency according to the ramp
-    if (g_freq_ramp && (g_env_stage == 1)) {
-      g_freq_ramp_cnt++;
-      if (g_freq_ramp_cnt == g_freq_ramp) {
-        g_freq_ramp_cnt = 0;
-        g_curr_freq += 1;
+    if (g_env_type == 2) {
+      if (g_env_stage == 0) {
+        g_freq_ramp_cnt += g_env_lengths[0]/0x10;
+        g_curr_freq += 8+(g_freq_ramp_cnt/8);
+        g_freq_ramp_cnt &= 0x0007;
+        if (g_curr_freq > g_base_freq) {
+          g_curr_freq = g_base_freq;
+          g_env_stage = 1;
+        }
+      }
+      else if (g_env_stage == 1) {
+        g_curr_freq = g_base_freq;
+      }
+      else if (g_env_stage == 2) {
+        g_freq_ramp_cnt += 30;
+        g_curr_freq += (g_freq_ramp_cnt / (g_env_lengths[1]/0x10 + 1));
+        g_freq_ramp_cnt %= (g_env_lengths[1]/0x10 + 1);
+        if (g_curr_freq >= 16000) {
+          g_env_stage = 3;
+        }
+      }
+      else if (g_env_stage == 3) {
+        env_vol = 0;
       }
     }
   }
@@ -635,50 +722,32 @@ SIGNAL(PWM_INTERRUPT)
   //
   // low-pass filter
   //
-  
-  if (g_lpf_base_freq != 255) {
-    // to avoid ramping the low-pass frequency too quickly, use a counter
-    g_lpf_ramp_cnt++;
-    // adjust the low-pass filter current frequency
-    if ((g_lpf_ramp < 0) && (g_lpf_ramp_cnt == (unsigned char)-g_lpf_ramp)) {
-      g_lpf_ramp_cnt = 0;
-      if (g_lpf_curr_freq) g_lpf_curr_freq--;
-    }
-    else if ((g_lpf_ramp > 0) && (g_lpf_ramp_cnt == (unsigned char)g_lpf_ramp)) {
-      g_lpf_ramp_cnt = 0;
-      if ((char)(g_lpf_curr_freq + 1) != 0) g_lpf_curr_freq++;
-    }
-    
-    // start with the resonance - multiply g_lpf_prev_delta by the factor
-    g_lpf_prev_delta /= 0x10;
-    g_lpf_prev_delta *= g_lpf_resonance;
-    g_lpf_prev_delta /= 0x10;
 
-    //
-    // now add the low-pass part
-    //
-    // since sample and g_lpf_prev are both between -1024 and 1023,
-    // we can be sure that g_lpf_prev_delta will not be
-    // incremented/decremented by more than 2047
-    //
-    g_lpf_prev_delta += (((short)sample-(short)g_lpf_prev) / 0x100) * (short)g_lpf_curr_freq;
-    if (g_lpf_prev_delta > 2047) g_lpf_prev_delta = 2047;
-    else if (g_lpf_prev_delta < -2048) g_lpf_prev_delta = -2048;
-    
-    // accumulate it to the filter's output
-    g_lpf_prev += g_lpf_prev_delta;
-    
-    if (g_lpf_prev > 1023) g_lpf_prev = 1023;
-    if (g_lpf_prev < -1024) g_lpf_prev = -1024;
-    
-    // filter output
-    sample = g_lpf_prev;
-  }
-  else {
-    g_lpf_prev = sample;
-    g_lpf_prev_delta = 0;
-  }
-  
+  // start with the resonance - multiply g_lpf_prev_delta by the factor
+  g_lpf_prev_delta /= 0x10;
+  g_lpf_prev_delta *= g_lpf_resonance;
+  g_lpf_prev_delta /= 0x10;
+
+  //
+  // now add the low-pass part
+  //
+  // since sample and g_lpf_prev are both between -1024 and 1023,
+  // we can be sure that g_lpf_prev_delta will not be
+  // incremented/decremented by more than 2047
+  //
+  g_lpf_prev_delta += (((short)sample-(short)g_lpf_prev) / 0x100) * (short)g_lpf_freq;
+  if (g_lpf_prev_delta > 2047) g_lpf_prev_delta = 2047;
+  else if (g_lpf_prev_delta < -2048) g_lpf_prev_delta = -2048;
+ 
+  // accumulate it to the filter's output
+  g_lpf_prev += g_lpf_prev_delta;
+
+  if (g_lpf_prev > 1023) g_lpf_prev = 1023;
+  if (g_lpf_prev < -1024) g_lpf_prev = -1024;
+
+  // filter output
+  sample = g_lpf_prev;
+
   // now sample is between -1024 and 1023
   // scale it between -128 and 127
   sample = sample / 8;

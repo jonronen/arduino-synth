@@ -43,6 +43,11 @@
 #define TONE3_PIN       11
 #define TONE4_PIN       12
 #define TONE5_PIN       13
+//
+// Note:
+// TONE5_PIN should be changed if you really want to use an Arduino Uno...
+// pin #13 is usually the LED and may not work properly as an input
+//
 
 #define LOWPASS_PIN     5
 #define FREQ_PIN        6
@@ -436,7 +441,6 @@ void setup()
   
   // Enable interrupt when TCNT1 == OCR1A (p.136)
   TIMSK1 |= _BV(OCIE1A);
-  sei();
   
   // set up the initial values for all the controls
 
@@ -468,35 +472,46 @@ void setup()
   digitalWrite(TONE5_PIN, HIGH);
   g_button_status = 0; // no buttons are pressed
 
+  // low-pass
+  pinMode(LOWPASS_PIN, INPUT);
+  digitalWrite(LOWPASS_PIN, HIGH);
+
+  // distortion
+  pinMode(FREQ_PIN, INPUT);
+  digitalWrite(FREQ_PIN, HIGH);
+
   // distortion
   pinMode(DIST_PIN, INPUT);
   digitalWrite(DIST_PIN, HIGH);
-  g_dist_status = 0; // no buttons are pressed
+  g_dist_status = 0; // not pressed
 
   // tremolo
   pinMode(TREM_PIN, INPUT);
   digitalWrite(TREM_PIN, HIGH);
-  g_trem_status = 0; // no buttons are pressed
+  g_trem_status = 0; // not pressed
+
+  // now enable interrupts
+  sei();
 }
 
 static unsigned char get_button_status()
 {
   unsigned char ans = 0;
-  if (digitalRead(TONE1_PIN) == LOW) ans &= 0x01;
-  if (digitalRead(TONE2_PIN) == LOW) ans &= 0x02;
-  if (digitalRead(TONE3_PIN) == LOW) ans &= 0x04;
-  if (digitalRead(TONE4_PIN) == LOW) ans &= 0x08;
-  if (digitalRead(TONE5_PIN) == LOW) ans &= 0x10;
+  if (digitalRead(TONE1_PIN) == LOW) ans |= 0x01;
+  if (digitalRead(TONE2_PIN) == LOW) ans |= 0x02;
+  if (digitalRead(TONE3_PIN) == LOW) ans |= 0x04;
+  if (digitalRead(TONE4_PIN) == LOW) ans |= 0x08;
+  if (digitalRead(TONE5_PIN) == LOW) ans |= 0x10;
   return ans;
 }
 
 static unsigned short get_base_freq(unsigned char status)
 {
-  if (status == 1) return 240;
-  if (status == 2) return 270;
-  if (status == 3) return 300;
-  if (status == 4) return 360;
-  return 405;
+  if (status & 0x10) return 320;
+  if (status & 0x08) return 360;
+  if (status & 0x04) return 400;
+  if (status & 0x02) return 480;
+  return 540;
 }
 
 void loop()

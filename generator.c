@@ -101,7 +101,6 @@ static short g_lpf_prev_delta;
 // vibrato
 static unsigned short g_vib_phase;
 static unsigned char g_vib_strength;
-static unsigned char g_vib_speed;
 static short g_vib_fix_accum;
 
 // tremolo and distortion
@@ -109,6 +108,7 @@ static unsigned short g_interrupt_cnt;
 
 // buttons
 static uint8_t g_button_status;
+static uint8_t g_current_pitch_bit;
 static uint8_t g_dist_status;
 static uint8_t g_trem_status;
 
@@ -444,8 +444,8 @@ void setup()
   
   // set up the initial values for all the controls
 
-  g_env_lengths[0] = 1;
-  g_env_lengths[1] = 1;
+  g_env_lengths[0] = 0;
+  g_env_lengths[1] = 0;
   g_env_type=0;
 
   g_base_freq = 440;
@@ -453,7 +453,6 @@ void setup()
 
   g_lpf_resonance = 0;
   
-  g_vib_speed = 100; /* default value, remains unchanged */
   g_vib_strength = 0;
   
   // set the parameters but don't start playing
@@ -471,6 +470,7 @@ void setup()
   pinMode(TONE5_PIN, INPUT);
   digitalWrite(TONE5_PIN, HIGH);
   g_button_status = 0; // no buttons are pressed
+  g_current_pitch_bit = 0; // no buttons are pressed
 
   // low-pass
   pinMode(LOWPASS_PIN, INPUT);
@@ -516,7 +516,9 @@ static unsigned short get_base_freq(unsigned char status)
 
 void loop()
 {
-  uint8_t new_status; 
+  uint8_t new_status;
+  uint8_t tmp;
+  uint8_t tmp_pitch_bit;
 
   //
   // the loop updates the sound parameters
@@ -528,43 +530,68 @@ void loop()
 
   // envelopes are updated only on silence and sustain
   if ((g_env_stage != 0) && (g_env_stage != 2)) {
-    g_env_lengths[0] = analogRead(ATTACK_CTRL) * 4;
-    g_env_lengths[1] = analogRead(RELEASE_CTRL) * 4;
+    g_env_lengths[0] = analogRead(ATTACK_CTRL) * 16;
+    g_env_lengths[1] = analogRead(RELEASE_CTRL) * 16;
     g_env_type = 
       (digitalRead(LOWPASS_PIN) == LOW) ? 1 :
-      (digitalRead(FREQ_PIN) == LOW) ? 2 : 0;
+      ((digitalRead(FREQ_PIN) == LOW) ? 2 : 0);
   }
 
   // vibrato and resonance are always welcome
-  g_vib_strength = analogRead(VIBRATO_CTRL) / 4;
-  g_lpf_resonance = analogRead(RESONANCE_CTRL) / 4;
+  tmp = (uint8_t)(analogRead(VIBRATO_CTRL) / 4);
+  g_vib_strength = (tmp > 20) ? tmp : 0;
+  tmp = analogRead(RESONANCE_CTRL) / 5;
+  g_lpf_resonance = (tmp > 15) ? tmp : 0;
 
   // so are tremolo and distortion
   g_trem_status = digitalRead(TREM_PIN)==LOW ? 1 : 0;
   g_dist_status = digitalRead(DIST_PIN)==LOW ? 1 : 0;
 
-  // is the pitch released?
+  //
+  // pitch buttons
+  //
+
   new_status = get_button_status();
-  if ((g_env_stage < 2) && (new_status == 0)) {
+
+  // is the current pitch released?
+  if ((g_env_stage < 2) && ((g_current_pitch_bit & new_status) == 0)) {
     g_env_stage = 2;
-    g_button_status = 0;
+  }
+
+  // are all buttons released?
+  if (new_status == 0) {
+    g_current_pitch_bit = 0x00;
   }
   // or is a different pitch selected?
-  else if (new_status && (new_status != g_button_status)) {
-    // filter the old pitch
-    new_status &= (~g_button_status);
-    // and select only one pitch
-    new_status &= (~(new_status-1));
+  else if (new_status != g_button_status) {
+    tmp_pitch_bit = g_current_pitch_bit;
 
-    g_button_status = new_status;
+    // if a new button is pressed - select it
+    if (new_status & (~g_button_status)) {
+      tmp_pitch_bit = new_status & (~g_button_status);
+    }
+    // or if the current pitch is released - select another
+    else if ((new_status & (~g_current_pitch_bit)) == 0) {
+      tmp_pitch_bit = new_status;
+    }
 
-    // now play the new pitch from scratch
-    cli();
-    g_base_freq = get_base_freq(new_status);
-    reset_sample();
-    g_env_stage = 0;
-    sei();
+    // select only one pitch
+    tmp_pitch_bit &= (~(tmp_pitch_bit-1));
+
+    // if it's really a different pitch, play it
+    if (tmp_pitch_bit != g_current_pitch_bit) {
+      g_current_pitch_bit = tmp_pitch_bit;
+
+      // change the pitch with interrupts disabled
+      cli();
+      g_base_freq = get_base_freq(g_current_pitch_bit);
+      reset_sample();
+      g_env_stage = 0;
+      sei();
+    }
   }
+
+  g_button_status = new_status;
 }
 
 static void reset_sample()
@@ -574,7 +601,7 @@ static void reset_sample()
 
   g_curr_freq = g_base_freq;
   if (g_env_type == 2) {
-    g_curr_freq = g_base_freq / (g_env_lengths[0]/16 + 1);
+    g_curr_freq = g_base_freq / (g_env_lengths[0]/64 + 1);
     if (g_curr_freq < 40) g_curr_freq = 40;
   }
 
@@ -604,19 +631,23 @@ SIGNAL(PWM_INTERRUPT)
   unsigned char* p_env_item;
   unsigned short vibrated_freq;
   short vib_fix;
-  
+
   // use another oscillator with a lower frequency for the vibrato
-  g_vib_phase += g_vib_speed;
+  g_vib_phase += 20;
   
-  if(g_vib_strength > 0)
+  if(g_vib_strength)
   {
     // vib_fix should be between -0x80 and 0x7f
     g_vib_fix_accum += phase_to_delta[g_vib_phase/0x4000];
     vib_fix = ((g_vib_fix_accum / 0x80) * (short)g_vib_strength) / 0x10;
     
     // fix the frequency according to the vibrato
-    if ((vib_fix < 0) && ((unsigned short)(-vib_fix) >= g_curr_freq)) vibrated_freq = 1;
-    else vibrated_freq = g_curr_freq + vib_fix;
+    if ((vib_fix < 0) && ((unsigned short)(-vib_fix) >= g_curr_freq)) {
+      vibrated_freq = 1;
+    }
+    else {
+      vibrated_freq = g_curr_freq + vib_fix;
+    }
   }
   else {
     vibrated_freq = g_curr_freq;
@@ -626,9 +657,15 @@ SIGNAL(PWM_INTERRUPT)
   // volume/low-pass envelope
   //
 
-  if (g_env_type < 2) {
-    p_env_item = (g_env_type==0) ? &env_vol : &g_lpf_freq;
+  p_env_item = (g_env_type==0) ? &env_vol : &g_lpf_freq;
 
+  // this is performed anyway - for all env types
+  if (g_env_stage == 3) {
+    // at stage three there's nothing to play
+    *p_env_item = 0;
+    env_vol = 0;
+  }
+  else if (g_env_type < 2) {
     // compute by stage, keeping *p_env_item between zero and 0xff
     if (g_env_stage == 0) {
       g_env_time++;
@@ -646,11 +683,8 @@ SIGNAL(PWM_INTERRUPT)
       }
       *p_env_item=255-(unsigned char)(g_env_time/ (g_env_lengths[1]/0x100 + 1));
     }
-    else if (g_env_stage == 1) {
+    else { // g_env_stage == 1
       *p_env_item = 255;
-    }
-    else {
-      *p_env_item = 0;
     }
   }
 
@@ -678,28 +712,30 @@ SIGNAL(PWM_INTERRUPT)
     g_phase &= 0x3FFF;
     
     //
-    // wave length wraparound. this is a good time to make changes in the frequency
+    // wave length wraparound
+    // this is a good time to make changes in the frequency
     //
     
     // fix the frequency according to the ramp
     if (g_env_type == 2) {
       if (g_env_stage == 0) {
-        g_freq_ramp_cnt += g_env_lengths[0]/0x10;
-        g_curr_freq += 8+(g_freq_ramp_cnt/8);
-        g_freq_ramp_cnt &= 0x0007;
+        g_freq_ramp_cnt += (0xff - g_env_lengths[0]/64);
+        g_curr_freq += 1+(g_freq_ramp_cnt/32);
+        g_freq_ramp_cnt &= 0x001f;
         if (g_curr_freq > g_base_freq) {
           g_curr_freq = g_base_freq;
           g_env_stage = 1;
+          g_freq_ramp_cnt = 0;
         }
       }
       else if (g_env_stage == 1) {
         g_curr_freq = g_base_freq;
       }
       else if (g_env_stage == 2) {
-        g_freq_ramp_cnt += 30;
-        g_curr_freq += (g_freq_ramp_cnt / (g_env_lengths[1]/0x10 + 1));
-        g_freq_ramp_cnt %= (g_env_lengths[1]/0x10 + 1);
-        if (g_curr_freq >= 16000) {
+        g_freq_ramp_cnt += (0xff - g_env_lengths[1]/64);
+        g_curr_freq += 1+(g_freq_ramp_cnt/8);
+        g_freq_ramp_cnt &= 0x0007;
+        if (g_curr_freq >= 4000) {
           g_env_stage = 3;
         }
       }

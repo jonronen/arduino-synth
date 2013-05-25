@@ -540,8 +540,8 @@ void loop()
   // vibrato and resonance are always welcome
   tmp = (uint8_t)(analogRead(VIBRATO_CTRL) / 4);
   g_vib_strength = (tmp > 20) ? tmp : 0;
-  tmp = analogRead(RESONANCE_CTRL) / 5;
-  g_lpf_resonance = (tmp > 15) ? tmp : 0;
+  tmp = analogRead(RESONANCE_CTRL) / 4;
+  g_lpf_resonance = (tmp > 20) ? tmp : 0;
 
   // so are tremolo and distortion
   g_trem_status = digitalRead(TREM_PIN)==LOW ? 1 : 0;
@@ -786,7 +786,8 @@ SIGNAL(PWM_INTERRUPT)
   // we can be sure that g_lpf_prev_delta will not be
   // incremented/decremented by more than 2047
   //
-  g_lpf_prev_delta += (((short)sample-(short)g_lpf_prev) / 0x100) * (short)g_lpf_freq;
+  g_lpf_prev_delta +=
+    ((((short)sample-(short)g_lpf_prev) / 0x10) * (short)g_lpf_freq) / 0x10;
   if (g_lpf_prev_delta > 2047) g_lpf_prev_delta = 2047;
   else if (g_lpf_prev_delta < -2048) g_lpf_prev_delta = -2048;
  

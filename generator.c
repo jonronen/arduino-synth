@@ -602,7 +602,7 @@ static void reset_sample()
   g_curr_freq = g_base_freq;
   if (g_env_type == 2) {
     g_curr_freq = g_base_freq / (g_env_lengths[0]/64 + 1);
-    if (g_curr_freq < 40) g_curr_freq = 40;
+    if (g_curr_freq < 80) g_curr_freq = 80;
   }
 
   // reset filters
@@ -628,6 +628,7 @@ SIGNAL(PWM_INTERRUPT)
   short sample;
   unsigned short fp;
   unsigned char env_vol = 0xff;
+  unsigned char tmp;
   unsigned char* p_env_item;
   unsigned short vibrated_freq;
   short vib_fix;
@@ -681,7 +682,11 @@ SIGNAL(PWM_INTERRUPT)
         g_env_time = 0;
         g_env_stage = 3;
       }
-      *p_env_item=255-(unsigned char)(g_env_time/ (g_env_lengths[1]/0x100 + 1));
+      // p_env_item can only decrease on stage 2
+      tmp = 255-(unsigned char)(g_env_time/ (g_env_lengths[1]/0x100 + 1));
+      if (tmp < *p_env_item) {
+        *p_env_item = tmp;
+      }
     }
     else { // g_env_stage == 1
       *p_env_item = 255;
@@ -720,7 +725,7 @@ SIGNAL(PWM_INTERRUPT)
     if (g_env_type == 2) {
       if (g_env_stage == 0) {
         g_freq_ramp_cnt += (0xff - g_env_lengths[0]/64);
-        g_curr_freq += 1+(g_freq_ramp_cnt/32);
+        g_curr_freq += 3+(g_freq_ramp_cnt/32);
         g_freq_ramp_cnt &= 0x001f;
         if (g_curr_freq > g_base_freq) {
           g_curr_freq = g_base_freq;
@@ -733,8 +738,8 @@ SIGNAL(PWM_INTERRUPT)
       }
       else if (g_env_stage == 2) {
         g_freq_ramp_cnt += (0xff - g_env_lengths[1]/64);
-        g_curr_freq += 1+(g_freq_ramp_cnt/8);
-        g_freq_ramp_cnt &= 0x0007;
+        g_curr_freq += 5+(g_freq_ramp_cnt/32);
+        g_freq_ramp_cnt &= 0x001f;
         if (g_curr_freq >= 4000) {
           g_env_stage = 3;
         }

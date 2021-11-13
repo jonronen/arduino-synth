@@ -1,37 +1,37 @@
 MCU ?= atmega328p
 
-ARDUINO_FILES ?= /usr/share/arduino/hardware
-ARDUINO_SRCS = $(ARDUINO_FILES)/arduino/cores/arduino
+ARDUINO_FILES ?= ~/Downloads/arduino-1.8.16/hardware
+ARDUINO_SRCS = $(ARDUINO_FILES)/tools/avr/avr/include
 
 ARDUINO_PORT ?= /dev/ttyACM0
 
 
-GPP_FLAGS := -c -g -O3 -Wall -fno-exceptions -ffunction-sections -fdata-sections -mmcu=$(MCU) -DF_CPU=16000000L -DARDUINO=101 -I$(ARDUINO_SRCS) -I$(ARDUINO_FILES)/arduino/variants/standard
+GPP_FLAGS := -c -g -O3 -w -std=gnu11 -ffunction-sections -fdata-sections -MMD -flto -fno-fat-lto-objects -mmcu=$(MCU) -DF_CPU=16000000L -DARDUINO=10807 -DARDUINO_AVR_UNO -DARDUINO_ARCH_AVR -I $(ARDUINO_SRCS) -I $(ARDUINO_FILES)/arduino/avr/cores/arduino -I $(ARDUINO_FILES)/arduino/avr/variants/standard
 
 
 generator.hex: generator.elf
-	avr-objcopy -O ihex -R .eeprom generator.elf generator.hex
+	$(ARDUINO_FILES)/tools/avr/bin/avr-objcopy -O ihex -R .eeprom generator.elf generator.hex
 
 generator.elf: generator.o main.o wiring.o wiring_analog.o wiring_digital.o
-	avr-gcc -O3 -Wl,--gc-sections -mmcu=$(MCU) -o generator.elf generator.o main.o wiring.o wiring_analog.o wiring_digital.o -lm
+	$(ARDUINO_FILES)/tools/avr/bin/avr-gcc -w -O3 -g -flto -fuse-linker-plugin -Wl,--gc-sections -mmcu=$(MCU) -o generator.elf generator.o main.o wiring.o wiring_analog.o wiring_digital.o -lm
 
 main.o:
-	avr-g++ $(GPP_FLAGS) $(ARDUINO_SRCS)/main.cpp
+	$(ARDUINO_FILES)/tools/avr/bin/avr-gcc $(GPP_FLAGS) $(ARDUINO_FILES)/arduino/avr/cores/arduino/main.cpp
 
 wiring.o:
-	avr-g++ $(GPP_FLAGS) $(ARDUINO_SRCS)/wiring.c
+	$(ARDUINO_FILES)/tools/avr/bin/avr-gcc $(GPP_FLAGS) $(ARDUINO_FILES)/arduino/avr/cores/arduino/wiring.c
 
 wiring_analog.o:
-	avr-g++ $(GPP_FLAGS) $(ARDUINO_SRCS)/wiring_analog.c
+	$(ARDUINO_FILES)/tools/avr/bin/avr-gcc $(GPP_FLAGS) $(ARDUINO_FILES)/arduino/avr/cores/arduino/wiring_analog.c
 
 wiring_digital.o:
-	avr-g++ $(GPP_FLAGS) $(ARDUINO_SRCS)/wiring_digital.c
+	$(ARDUINO_FILES)/tools/avr/bin/avr-gcc $(GPP_FLAGS) $(ARDUINO_FILES)/arduino/avr/cores/arduino/wiring_digital.c
 
 generator.o: generator.c
-	avr-g++ $(GPP_FLAGS) generator.c
+	$(ARDUINO_FILES)/tools/avr/bin/avr-gcc $(GPP_FLAGS) generator.c
 
 upload: generator.hex
-	$(ARDUINO_FILES)/tools/avrdude -C$(ARDUINO_FILES)/tools/avrdude.conf -v -p$(MCU) -carduino -P$(ARDUINO_PORT) -b115200 -D -Uflash:w:generator.hex:i
+	$(ARDUINO_FILES)/tools/avr/bin/avrdude -C $(ARDUINO_FILES)/tools/avr/etc/avrdude.conf -v -p$(MCU) -carduino -P$(ARDUINO_PORT) -b115200 -D -Uflash:w:generator.hex:i
 
 clean:
 	rm -f *.o *.hex *.elf

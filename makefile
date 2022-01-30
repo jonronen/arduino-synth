@@ -33,6 +33,13 @@ generator.o: generator.c
 upload: generator.hex
 	$(ARDUINO_FILES)/tools/avr/bin/avrdude -C $(ARDUINO_FILES)/tools/avr/etc/avrdude.conf -v -p$(MCU) -carduino -P$(ARDUINO_PORT) -b115200 -D -Uflash:w:generator.hex:i
 
+upload_no_bootloader: generator.hex
+	$(ARDUINO_FILES)/tools/avr/bin/avrdude -C $(ARDUINO_FILES)/tools/avr/etc/avrdude.conf -v -p$(MCU) -cstk500v1 -P$(ARDUINO_PORT) -b19200 -Uflash:w:generator.hex:i
+
+fuses:
+	$(ARDUINO_FILES)/tools/avr/bin/avrdude -C $(ARDUINO_FILES)/tools/avr/etc/avrdude.conf -v -v -v -p$(MCU) -cstk500v1 -P$(ARDUINO_PORT) -b19200 -U lfuse:w:0xe7:m -U hfuse:w:0xdf:m -U efuse:w:0xfd:m
+
+
 clean:
 	rm -f *.o *.hex *.elf
 
